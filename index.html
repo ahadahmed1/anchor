@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Project Ledger</title>
+<meta name="description" content="Track projects, epics, stories and tasks in a single offline-first ledger.">
+<meta name="theme-color" id="themeColor" content="#0F1218">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ledger">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
+<script src="js/storage.js"></script>
+<script>
+  /* Apply the saved theme before first paint so there is no flash of the wrong one. */
+  (function(){
+    var theme = Store.getSync('theme');
+    if(!theme) theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+    document.getElementById('themeColor').setAttribute('content', theme === 'light' ? '#F5F6F8' : '#0F1218');
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">
+        <div class="brand-dot"></div>
+        <h1>Project Ledger</h1>
+      </div>
+      <div class="brand-sub">PROJECT → EPIC → STORY → TASK</div>
+    </div>
+    <div class="topbar-actions">
+      <button class="install-btn" id="installBtn" hidden>Install</button>
+      <div class="seg-toggle" id="themeToggle">
+        <button class="seg-opt" data-theme-opt="dark">dark</button>
+        <button class="seg-opt" data-theme-opt="light">light</button>
+      </div>
+      <button class="new-btn" id="newBtn">+ New project</button>
+    </div>
+  </div>
+
+  <div class="quickadd" id="quickAdd">
+    <span class="qa-label">Quick add</span>
+    <div class="seg-toggle mini" id="qaTypeToggle">
+      <button class="seg-opt active" data-qa-type="epic">epic</button>
+      <button class="seg-opt" data-qa-type="story">story</button>
+    </div>
+    <select class="qa-select" id="qaProject"></select>
+    <select class="qa-select" id="qaEpic" style="display:none"></select>
+    <input class="qa-input" type="text" id="qaName" placeholder="Name...">
+    <button class="qa-btn" id="qaAdd">Add</button>
+    <button class="qa-details-btn" id="qaDetails">+ details</button>
+  </div>
+
+  <div class="ledger" id="ledgerStrip"></div>
+
+  <div class="filters">
+    <div class="tab-group" id="statusTabs">
+      <button class="tab active" data-filter="all">all</button>
+      <button class="tab" data-filter="not_started">not started</button>
+      <button class="tab" data-filter="in_progress">in progress</button>
+      <button class="tab" data-filter="blocked">blocked</button>
+      <button class="tab" data-filter="done">done</button>
+    </div>
+    <div class="seg-toggle" id="viewToggle">
+      <button class="seg-opt active" data-global-view="list">list</button>
+      <button class="seg-opt" data-global-view="board">board</button>
+    </div>
+    <input class="search-input" id="searchInput" type="text" placeholder="search...">
+  </div>
+
+  <div class="grid" id="grid">
+    <div class="loading">loading ledger…</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div id="modalRoot"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
