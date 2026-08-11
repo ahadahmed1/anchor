@@ -34,6 +34,9 @@ let expandedId = null;
 let expandedGroups = new Set();
 let expandedItems = new Set();
 let searchTerm = '';
+let editingField = null;           // fieldKey of the single field currently in edit mode (text input, chip picker, or popover), or null
+let extraFieldsExpanded = new Set(); // pathKeys whose category-specific extra fields are expanded from summary into individual fields
+let logDetailsOpen = new Set();    // item ids whose "add details" (note/cost/mileage) panel is expanded for the next log entry
 
 const grid = document.getElementById('grid');
 const ledgerStrip = document.getElementById('ledgerStrip');
@@ -135,6 +138,26 @@ function dueInfo(item, today){
   const due = startOfDay(addUnits(new Date(base), Number(rec.every||1), rec.unit||'months'));
   const days = Math.round((due-today)/DAY_MS);
   return {dueDate: due.toISOString().slice(0,10), state: days<0 ? 'overdue' : days<=lead ? 'due_soon' : 'upcoming'};
+}
+
+/* Friendly presets for the recurrence popover; "custom" falls through to raw every+unit inputs. */
+const RECUR_PRESETS = [
+  {key:'weekly', label:'Weekly', every:1, unit:'weeks'},
+  {key:'monthly', label:'Monthly', every:1, unit:'months'},
+  {key:'quarterly', label:'Every 3 months', every:3, unit:'months'},
+  {key:'biannual', label:'Every 6 months', every:6, unit:'months'},
+  {key:'yearly', label:'Yearly', every:1, unit:'years'}
+];
+const MONTH_LABEL = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function describeRecurrence(item){
+  const rec = item.recurrence || {type:'interval', every:3, unit:'months'};
+  if(rec.type==='once') return rec.date ? `One-off, due ${rec.date}` : 'One-off — no date set';
+  if(rec.type==='fixed') return `Every year on ${MONTH_LABEL[(rec.month||1)-1]} ${rec.day||1}`;
+  const preset = RECUR_PRESETS.find(p=>p.every===rec.every && p.unit===rec.unit);
+  if(preset) return preset.label;
+  const label = RECUR_UNIT_LABEL[rec.unit] || rec.unit;
+  const unitWord = label.replace('(s)', rec.every===1 ? '' : 's');
+  return `Every ${rec.every} ${unitWord}`;
 }
 
 /* ---- Health rollups (computed, never stored) ---- */
@@ -418,9 +441,17 @@ function deleteItem(did, gid, iid){
 function setItemRecurrenceType(did, gid, iid, type){
   const {domain, item} = locateItem(did, gid, iid);
   if(!item) return;
-  if(type==='interval') item.recurrence = {type:'interval', every:3, unit:'months'};
-  else if(type==='fixed') item.recurrence = {type:'fixed', month:1, day:1};
-  else item.recurrence = {type:'once', date: new Date().toISOString().slice(0,10)};
+  const rec = item.recurrence || {};
+  if(type==='interval') item.recurrence = rec.type==='interval' ? rec : {type:'interval', every:1, unit:'days'};
+  else if(type==='fixed') item.recurrence = rec.type==='fixed' ? rec : {type:'fixed', month:1, day:1};
+  else item.recurrence = rec.type==='once' ? rec : {type:'once', date: new Date().toISOString().slice(0,10)};
+  domain.updatedAt = new Date().toISOString();
+  persist(); render();
+}
+function setItemRecurrencePreset(did, gid, iid, every, unit){
+  const {domain, item} = locateItem(did, gid, iid);
+  if(!item) return;
+  item.recurrence = {type:'interval', every, unit};
   domain.updatedAt = new Date().toISOString();
   persist(); render();
 }
@@ -489,9 +520,6 @@ function openModal({type, did, gid, name}){
   renderModal();
 }
 function closeModal(){ modalState = null; renderModal(); }
-function categoryOptions(current){
-  return CATEGORY_ORDER.map(k=>`<option value="${k}" ${current===k?'selected':''}>${CATEGORIES[k].label}</option>`).join('');
-}
 function statusOptions(current){
   return STATUS_ORDER.map(s=>`<option value="${s}" ${current===s?'selected':''}>${STATUS_LABEL[s]}</option>`).join('');
 }
@@ -507,7 +535,12 @@ function renderModal(){
     subLabel = 'top-level';
     body = `
       <div class="field"><span class="field-label">Name</span><input type="text" id="modalName" value="${escapeAttr(modalState.name)}" placeholder="Domain name"></div>
-      <div class="field"><span class="field-label">Category</span><select id="modalCategory">${categoryOptions(modalState.category)}</select></div>
+      <div class="field"><span class="field-label">Category</span>
+        <div class="cat-chip-grid">${CATEGORY_ORDER.map(k=>{
+          const c = CATEGORIES[k];
+          return `<button type="button" class="chip ${modalState.category===k?'active':''}" data-modal-category="${k}"><span class="chip-dot ${c.color}"></span>${c.label}</button>`;
+        }).join('')}</div>
+      </div>
       <div class="field"><span class="field-label">Notes</span><textarea id="modalDesc" placeholder="Optional details...">${escapeHtml(modalState.notes)}</textarea></div>
     `;
   } else if(modalState.type === 'group'){
@@ -556,6 +589,9 @@ function renderModal(){
   document.querySelectorAll('[data-modal-kind]').forEach(btn=>{
     btn.addEventListener('click', ()=>{ modalState.kind = btn.getAttribute('data-modal-kind'); modalState.name = document.getElementById('modalName').value; modalState.notes = document.getElementById('modalDesc').value; renderModal(); });
   });
+  document.querySelectorAll('[data-modal-category]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ modalState.category = btn.getAttribute('data-modal-category'); modalState.name = document.getElementById('modalName').value; modalState.notes = document.getElementById('modalDesc').value; renderModal(); });
+  });
   const nameEl = document.getElementById('modalName');
   nameEl.focus(); nameEl.select();
   nameEl.addEventListener('keydown', e=>{
@@ -568,8 +604,7 @@ function submitModal(){
   const notes = document.getElementById('modalDesc').value;
   if(!name){ showToast('name is required'); return; }
   if(modalState.type==='domain'){
-    const category = document.getElementById('modalCategory').value;
-    createDomain(name, category, notes);
+    createDomain(name, modalState.category, notes);
     showToast('domain added');
   } else if(modalState.type==='group'){
     if(!modalState.did){ showToast('pick a domain first'); return; }
@@ -684,14 +719,48 @@ function escapeHtml(str){
   return (str||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 }
 function escapeAttr(str){ return escapeHtml(str); }
+
+/* ---- Click-to-edit field ----
+   Renders plain display text by default; swaps to the caller's live editHtml when
+   `fieldKey` matches the single app-wide `editingField`. Click on the display starts
+   editing; blur/Escape (wired in attachHandlers) ends it. */
+function renderField(fieldKey, label, displayHtml, editHtml){
+  if(editingField === fieldKey){
+    return `<div class="field"><span class="field-label">${label}</span>${editHtml}</div>`;
+  }
+  return `<div class="field-display" data-start-edit="${escapeAttr(fieldKey)}">
+    <span class="field-label">${label}</span>
+    <div class="field-display-value">${displayHtml}</div>
+  </div>`;
+}
+function textFieldHtml(value, placeholder){
+  return value && String(value).trim()
+    ? `<span class="field-text">${escapeHtml(value)}</span>`
+    : `<span class="field-text field-empty">${escapeHtml(placeholder||'Click to add')}</span>`;
+}
+
+/* ---- Category-specific extra fields ----
+   Collapsed to one summary line by default; clicking it expands into normal editable
+   fields (one click gets you to something typeable — no second click per field). */
+function extraFieldsSummary(configFields, values){
+  values = values || {};
+  const parts = configFields.map(f=> values[f.key]!=null && values[f.key]!=='' ? String(values[f.key]) : null).filter(Boolean);
+  return parts.length ? parts.join(' · ') : 'Click to add ' + configFields.map(f=>f.label.toLowerCase()).join(', ');
+}
 function renderExtraFields(configFields, values, dataAttr, pathKey){
   if(!configFields || !configFields.length) return '';
   values = values || {};
-  return `<div class="extra-fields">${configFields.map(f=>`
-    <div class="field"><span class="field-label">${escapeHtml(f.label)}</span>
-      <input type="${f.type==='number'?'number':'text'}" value="${escapeAttr(values[f.key]!=null?String(values[f.key]):'')}" data-${dataAttr}="${pathKey}|${f.key}">
-    </div>
-  `).join('')}</div>`;
+  const expandKey = dataAttr + '|' + pathKey;
+  if(!extraFieldsExpanded.has(expandKey)){
+    return `<div class="extra-fields-summary" data-expand-fields="${escapeAttr(expandKey)}">${escapeHtml(extraFieldsSummary(configFields, values))}</div>`;
+  }
+  const fieldsHtml = configFields.map(f=>{
+    const raw = values[f.key]!=null ? String(values[f.key]) : '';
+    return `<div class="field"><span class="field-label">${escapeHtml(f.label)}</span>
+      <input type="${f.type==='number'?'number':'text'}" value="${escapeAttr(raw)}" data-${dataAttr}="${pathKey}|${f.key}">
+    </div>`;
+  }).join('');
+  return `<div class="extra-fields">${fieldsHtml}<button class="collapse-fields-btn" data-collapse-fields="${escapeAttr(expandKey)}">hide details</button></div>`;
 }
 
 /* ---- Main render ---- */
@@ -771,26 +840,31 @@ function renderBoardDomainCard(d){
   </div>`;
 }
 
+function renderCategoryChipGrid(fieldKey, selected, dataAttr, pathKey){
+  return `<div class="cat-chip-grid" data-field-input="${escapeAttr(fieldKey)}">${CATEGORY_ORDER.map(k=>{
+    const c = CATEGORIES[k];
+    return `<button type="button" class="chip ${selected===k?'active':''}" data-${dataAttr}="${pathKey!=null?pathKey+'|':''}${k}"><span class="chip-dot ${c.color}"></span>${c.label}</button>`;
+  }).join('')}</div>`;
+}
 function renderDomainDetail(d){
   const cat = catOf(d);
   const hasGroups = (d.groups||[]).length > 0;
   const ungroupedItems = d.items||[];
+  const nameFieldKey = 'dn|'+d.id, notesFieldKey = 'dno|'+d.id, catFieldKey = 'dc|'+d.id;
   return `
     <div class="detail">
-      <div class="field">
-        <span class="field-label">Name</span>
-        <input type="text" value="${escapeAttr(d.name)}" data-edit-domain-name="${d.id}" data-name-input="${d.id}">
-      </div>
-      <div class="field-row">
-        <div class="field">
-          <span class="field-label">Category</span>
-          <select data-edit-domain-category="${d.id}">${categoryOptions(d.category)}</select>
-        </div>
-      </div>
-      <div class="field">
-        <span class="field-label">Notes</span>
-        <textarea data-edit-domain-notes="${d.id}" placeholder="What is this domain, and where does it stand?">${escapeHtml(d.notes||'')}</textarea>
-      </div>
+      ${renderField(nameFieldKey, 'Name',
+        textFieldHtml(d.name),
+        `<input type="text" value="${escapeAttr(d.name)}" data-edit-domain-name="${d.id}" data-field-input="${nameFieldKey}" data-name-input="${d.id}">`
+      )}
+      ${renderField(catFieldKey, 'Category',
+        `<span class="field-text"><span class="chip-dot ${cat.color}"></span>${cat.label}</span>`,
+        renderCategoryChipGrid(catFieldKey, d.category, 'set-domain-category', d.id)
+      )}
+      ${renderField(notesFieldKey, 'Notes',
+        textFieldHtml(d.notes, 'What is this domain, and where does it stand?'),
+        `<textarea data-edit-domain-notes="${d.id}" data-field-input="${notesFieldKey}" placeholder="What is this domain, and where does it stand?">${escapeHtml(d.notes||'')}</textarea>`
+      )}
       ${renderExtraFields(cat.domainFields, d.fields, 'edit-domain-field', d.id)}
 
       <div class="subsection">
@@ -864,8 +938,14 @@ function renderGroupNode(d, g){
       </div>
       ${isOpen ? `
         <div class="node-detail">
-          <div class="field"><span class="field-label">Name</span><input type="text" value="${escapeAttr(g.name)}" data-edit-group-name="${d.id}|${g.id}"></div>
-          <div class="field"><span class="field-label">Notes</span><textarea data-edit-group-notes="${d.id}|${g.id}" placeholder="What does this ${cat.groupNoun.toLowerCase()} cover?">${escapeHtml(g.notes||'')}</textarea></div>
+          ${renderField('gn|'+d.id+'|'+g.id, 'Name',
+            textFieldHtml(g.name),
+            `<input type="text" value="${escapeAttr(g.name)}" data-edit-group-name="${d.id}|${g.id}" data-field-input="gn|${d.id}|${g.id}">`
+          )}
+          ${renderField('gno|'+d.id+'|'+g.id, 'Notes',
+            textFieldHtml(g.notes, `What does this ${cat.groupNoun.toLowerCase()} cover?`),
+            `<textarea data-edit-group-notes="${d.id}|${g.id}" data-field-input="gno|${d.id}|${g.id}" placeholder="What does this ${cat.groupNoun.toLowerCase()} cover?">${escapeHtml(g.notes||'')}</textarea>`
+          )}
           ${renderExtraFields(cat.groupFields, g.fields, 'edit-group-field', d.id+'|'+g.id)}
           <div class="subsection">
             <span class="field-label">${cat.itemNoun}s</span>
@@ -900,15 +980,58 @@ function renderItemNode(d, g, it){
   `;
 }
 
+function renderRecurPopover(key, it){
+  const rec = it.recurrence || {type:'interval', every:3, unit:'months'};
+  const subKey = 'irec-sub|'+key;
+  if(editingField === subKey){
+    let subFields;
+    if(rec.type==='fixed'){
+      subFields = `
+        <div class="recur-row">
+          <div class="field"><span class="field-label">Month</span><input type="number" min="1" max="12" value="${rec.month}" data-edit-recur-month="${key}"></div>
+          <div class="field"><span class="field-label">Day</span><input type="number" min="1" max="31" value="${rec.day}" data-edit-recur-day="${key}"></div>
+        </div>`;
+    } else if(rec.type==='once'){
+      subFields = `<div class="recur-row"><div class="field"><span class="field-label">Date</span><input type="date" value="${rec.date||''}" data-edit-recur-date="${key}"></div></div>`;
+    } else {
+      subFields = `
+        <div class="recur-row">
+          <div class="field"><span class="field-label">Every</span><input type="number" min="1" value="${rec.every}" data-edit-recur-every="${key}"></div>
+          <div class="field"><span class="field-label">Unit</span><select data-edit-recur-unit="${key}">
+            ${['days','weeks','months','years','miles'].map(u=>`<option value="${u}" ${rec.unit===u?'selected':''}>${RECUR_UNIT_LABEL[u]}</option>`).join('')}
+          </select></div>
+        </div>`;
+    }
+    return `<div class="recur-popover">
+      <div class="chip-row-inline">
+        <button type="button" class="chip" data-recur-back="${key}">&lsaquo; back</button>
+        <button type="button" class="chip" data-close-field="${subKey}">done</button>
+      </div>
+      ${subFields}
+    </div>`;
+  }
+  return `<div class="recur-popover">
+    <div class="chip-row-inline">
+      ${RECUR_PRESETS.map(p=>`<button type="button" class="chip ${rec.type==='interval'&&rec.every===p.every&&rec.unit===p.unit?'active':''}" data-set-recur-preset="${key}|${p.key}">${p.label}</button>`).join('')}
+      <button type="button" class="chip" data-set-recur-custom="${key}">Custom&hellip;</button>
+      <button type="button" class="chip ${rec.type==='fixed'?'active':''}" data-set-recur-custom-type="${key}|fixed">Fixed date</button>
+      <button type="button" class="chip ${rec.type==='once'?'active':''}" data-set-recur-custom-type="${key}|once">One-off</button>
+    </div>
+  </div>`;
+}
 function renderItemDetail(d, g, it){
   const gid = g ? g.id : '';
   const key = `${d.id}|${gid}|${it.id}`;
   const cat = catOf(d);
   const common = `
-    <div class="field-row">
-      <div class="field"><span class="field-label">Name</span><input type="text" value="${escapeAttr(it.title)}" data-edit-item-title="${key}"></div>
-    </div>
-    <div class="field"><span class="field-label">Notes</span><textarea data-edit-item-notes="${key}" placeholder="Details...">${escapeHtml(it.notes||'')}</textarea></div>
+    ${renderField('it|'+key, 'Name',
+      textFieldHtml(it.title),
+      `<input type="text" value="${escapeAttr(it.title)}" data-edit-item-title="${key}" data-field-input="it|${key}">`
+    )}
+    ${renderField('ino|'+key, 'Notes',
+      textFieldHtml(it.notes, 'Details...'),
+      `<textarea data-edit-item-notes="${key}" data-field-input="ino|${key}" placeholder="Details...">${escapeHtml(it.notes||'')}</textarea>`
+    )}
     ${renderExtraFields(cat.itemFields, it.fields, 'edit-item-field', key)}
   `;
   let kindBlock;
@@ -923,7 +1046,10 @@ function renderItemDetail(d, g, it){
       </div>
     `).join('');
     kindBlock = `
-      <div class="field"><span class="field-label">Status</span><select data-edit-item-status="${key}">${statusOptions(it.status)}</select></div>
+      ${renderField('ist|'+key, 'Status',
+        `<span class="badge ${it.status}">${STATUS_LABEL[it.status]}</span>`,
+        `<div class="status-chip-row">${STATUS_ORDER.map(s=>`<button type="button" class="chip status-chip ${s} ${it.status===s?'active':''}" data-set-item-status="${key}|${s}">${STATUS_LABEL[s]}</button>`).join('')}</div>`
+      )}
       <div class="field">
         <span class="field-label">Checklist</span>
         <div class="tasks-list">${checklistHtml}</div>
@@ -932,30 +1058,6 @@ function renderItemDetail(d, g, it){
     `;
   } else {
     const rec = it.recurrence || {type:'interval', every:3, unit:'months'};
-    let recFields = '';
-    if(rec.type==='interval'){
-      recFields = `
-        <div class="recur-row">
-          <div class="field"><span class="field-label">Every</span><input type="number" min="1" value="${rec.every}" data-edit-recur-every="${key}"></div>
-          <div class="field"><span class="field-label">Unit</span><select data-edit-recur-unit="${key}">
-            ${['days','weeks','months','years','miles'].map(u=>`<option value="${u}" ${rec.unit===u?'selected':''}>${RECUR_UNIT_LABEL[u]}</option>`).join('')}
-          </select></div>
-        </div>
-      `;
-    } else if(rec.type==='fixed'){
-      recFields = `
-        <div class="recur-row">
-          <div class="field"><span class="field-label">Month</span><input type="number" min="1" max="12" value="${rec.month}" data-edit-recur-month="${key}"></div>
-          <div class="field"><span class="field-label">Day</span><input type="number" min="1" max="31" value="${rec.day}" data-edit-recur-day="${key}"></div>
-        </div>
-      `;
-    } else {
-      recFields = `
-        <div class="recur-row">
-          <div class="field"><span class="field-label">Date</span><input type="date" value="${rec.date||''}" data-edit-recur-date="${key}"></div>
-        </div>
-      `;
-    }
     const logHtml = (it.log||[]).map(l=>`
       <div class="log-item">
         <div class="log-item-body">
@@ -966,28 +1068,35 @@ function renderItemDetail(d, g, it){
         <button class="task-del" data-remove-log="${key}|${l.id}">&times;</button>
       </div>
     `).join('');
+    const detailsOpen = logDetailsOpen.has(it.id);
+    const logActionsHtml = detailsOpen ? `
+      <div class="add-log-row">
+        <input type="date" id="logDate-${it.id}" value="${new Date().toISOString().slice(0,10)}">
+        <input type="text" id="logNote-${it.id}" placeholder="Note (optional)">
+        <input type="text" id="logCost-${it.id}" placeholder="Cost (optional)">
+        ${rec.unit==='miles' ? `<input type="number" id="logMileage-${it.id}" placeholder="Mileage">` : ''}
+        <button class="qa-btn" data-add-log="${key}">Log entry</button>
+        <button class="add-details-link" data-toggle-log-details="${it.id}">cancel</button>
+      </div>
+    ` : `
+      <div class="log-actions">
+        <button class="mark-done-btn" data-mark-done="${key}">Mark done today</button>
+        <button class="add-details-link" data-toggle-log-details="${it.id}">+ add details</button>
+      </div>
+    `;
     kindBlock = `
       <div class="due-summary">${dueBadge(it)}</div>
-      <div class="field">
-        <span class="field-label">Recurrence</span>
-        <div class="seg-toggle mini" data-recur-type-toggle="${key}">
-          <button class="seg-opt ${rec.type==='interval'?'active':''}" data-set-recur-type="${key}|interval">interval</button>
-          <button class="seg-opt ${rec.type==='fixed'?'active':''}" data-set-recur-type="${key}|fixed">fixed date</button>
-          <button class="seg-opt ${rec.type==='once'?'active':''}" data-set-recur-type="${key}|once">one-off</button>
-        </div>
-        ${recFields}
-      </div>
-      <div class="field"><span class="field-label">Remind me (days before due)</span><input type="number" min="0" value="${it.reminderLeadDays==null?14:it.reminderLeadDays}" data-edit-lead-days="${key}"></div>
+      ${(editingField==='irec|'+key || editingField==='irec-sub|'+key)
+        ? `<div class="field"><span class="field-label">Recurrence</span>${renderRecurPopover(key, it)}</div>`
+        : `<div class="field-display" data-start-edit="irec|${key}"><span class="field-label">Recurrence</span><div class="field-display-value"><span class="field-text">${describeRecurrence(it)}</span></div></div>`}
+      ${renderField('ilead|'+key, 'Remind me',
+        `<span class="field-text">${it.reminderLeadDays==null?14:it.reminderLeadDays} days before due</span>`,
+        `<input type="number" min="0" value="${it.reminderLeadDays==null?14:it.reminderLeadDays}" data-edit-lead-days="${key}" data-field-input="ilead|${key}">`
+      )}
       <div class="field">
         <span class="field-label">Completion log</span>
         <div class="log-list">${logHtml || '<div class="empty-hint">Nothing logged yet.</div>'}</div>
-        <div class="add-log-row">
-          <input type="date" id="logDate-${it.id}" value="${new Date().toISOString().slice(0,10)}">
-          <input type="text" id="logNote-${it.id}" placeholder="Note (optional)">
-          <input type="text" id="logCost-${it.id}" placeholder="Cost (optional)">
-          ${rec.unit==='miles' ? `<input type="number" id="logMileage-${it.id}" placeholder="Mileage">` : ''}
-          <button class="qa-btn" data-add-log="${key}">Log done</button>
-        </div>
+        ${logActionsHtml}
       </div>
     `;
   }
@@ -1007,6 +1116,7 @@ function attachHandlers(){
       const id = el.getAttribute('data-toggle-domain');
       if(expandedId !== id){ groupViewMode = 'tree'; }
       expandedId = expandedId===id ? null : id;
+      editingField = null;
       render();
     });
   });
@@ -1037,9 +1147,13 @@ function attachHandlers(){
     el.addEventListener('click', e=>e.stopPropagation());
     el.addEventListener('change', ()=> updateDomain(el.getAttribute('data-edit-domain-name'), {name: el.value || 'Untitled domain'}));
   });
-  document.querySelectorAll('[data-edit-domain-category]').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=> updateDomain(el.getAttribute('data-edit-domain-category'), {category: el.value}));
+  document.querySelectorAll('[data-set-domain-category]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const [did,category] = el.getAttribute('data-set-domain-category').split('|');
+      editingField = null;
+      updateDomain(did, {category});
+    });
   });
   document.querySelectorAll('[data-edit-domain-notes]').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
@@ -1069,6 +1183,7 @@ function attachHandlers(){
     el.addEventListener('click', ()=>{
       const id = el.getAttribute('data-toggle-group');
       if(expandedGroups.has(id)) expandedGroups.delete(id); else expandedGroups.add(id);
+      editingField = null;
       render();
     });
   });
@@ -1097,6 +1212,7 @@ function attachHandlers(){
     el.addEventListener('click', ()=>{
       const [,,iid] = el.getAttribute('data-toggle-item').split('|');
       if(expandedItems.has(iid)) expandedItems.delete(iid); else expandedItems.add(iid);
+      editingField = null;
       render();
     });
   });
@@ -1146,9 +1262,13 @@ function attachHandlers(){
     el.addEventListener('click', e=>e.stopPropagation());
     el.addEventListener('change', ()=>{ const [did,gid,iid,key]=el.getAttribute('data-edit-item-field').split('|'); updateItemField(did,gid,iid,key,el.value); });
   });
-  document.querySelectorAll('[data-edit-item-status]').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-item-status').split('|'); updateItem(did,gid,iid,{status: el.value}); });
+  document.querySelectorAll('[data-set-item-status]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const [did,gid,iid,status] = el.getAttribute('data-set-item-status').split('|');
+      editingField = null;
+      updateItem(did,gid,iid,{status});
+    });
   });
   document.querySelectorAll('[data-delete-item]').forEach(el=>{
     el.addEventListener('click', e=>{
@@ -1168,9 +1288,45 @@ function attachHandlers(){
     el.addEventListener('click', e=>{ e.stopPropagation(); const [did,gid,iid,cid]=el.getAttribute('data-remove-checklist').split('|'); removeChecklistItem(did,gid,iid,cid); });
   });
 
-  /* Recurrence */
-  document.querySelectorAll('[data-set-recur-type]').forEach(el=>{
-    el.addEventListener('click', e=>{ e.stopPropagation(); const [did,gid,iid,type]=el.getAttribute('data-set-recur-type').split('|'); setItemRecurrenceType(did,gid,iid,type); });
+  /* Recurrence popover */
+  document.querySelectorAll('[data-set-recur-preset]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const [did,gid,iid,presetKey] = el.getAttribute('data-set-recur-preset').split('|');
+      const preset = RECUR_PRESETS.find(p=>p.key===presetKey);
+      if(!preset) return;
+      editingField = null;
+      setItemRecurrencePreset(did,gid,iid,preset.every,preset.unit);
+    });
+  });
+  document.querySelectorAll('[data-set-recur-custom]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const [did,gid,iid] = el.getAttribute('data-set-recur-custom').split('|');
+      setItemRecurrenceType(did,gid,iid,'interval');
+      editingField = 'irec-sub|'+did+'|'+gid+'|'+iid;
+      render();
+    });
+  });
+  document.querySelectorAll('[data-set-recur-custom-type]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const [did,gid,iid,type] = el.getAttribute('data-set-recur-custom-type').split('|');
+      setItemRecurrenceType(did,gid,iid,type);
+      editingField = 'irec-sub|'+did+'|'+gid+'|'+iid;
+      render();
+    });
+  });
+  document.querySelectorAll('[data-recur-back]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const key = el.getAttribute('data-recur-back');
+      editingField = 'irec|'+key;
+      render();
+    });
+  });
+  document.querySelectorAll('[data-close-field]').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); editingField = null; render(); });
   });
   document.querySelectorAll('[data-edit-recur-every]').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
@@ -1196,6 +1352,22 @@ function attachHandlers(){
     el.addEventListener('click', e=>e.stopPropagation());
     el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-lead-days').split('|'); updateItem(did,gid,iid,{reminderLeadDays: Number(el.value)||0}); });
   });
+  document.querySelectorAll('[data-mark-done]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const [did,gid,iid] = el.getAttribute('data-mark-done').split('|');
+      addLogEntry(did,gid,iid, {date: new Date().toISOString().slice(0,10)});
+      showToast('marked done');
+    });
+  });
+  document.querySelectorAll('[data-toggle-log-details]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const iid = el.getAttribute('data-toggle-log-details');
+      if(logDetailsOpen.has(iid)) logDetailsOpen.delete(iid); else logDetailsOpen.add(iid);
+      render();
+    });
+  });
   document.querySelectorAll('[data-add-log]').forEach(el=>{
     el.addEventListener('click', e=>{
       e.stopPropagation();
@@ -1204,12 +1376,14 @@ function attachHandlers(){
       const noteEl = document.getElementById('logNote-'+iid);
       const costEl = document.getElementById('logCost-'+iid);
       const mileageEl = document.getElementById('logMileage-'+iid);
-      addLogEntry(did,gid,iid, {
+      const entry = {
         date: dateEl ? dateEl.value : '',
         note: noteEl ? noteEl.value : '',
         cost: costEl ? costEl.value : '',
         mileage: mileageEl ? mileageEl.value : ''
-      });
+      };
+      logDetailsOpen.delete(iid);
+      addLogEntry(did,gid,iid, entry);
       showToast('logged');
     });
   });
@@ -1219,6 +1393,44 @@ function attachHandlers(){
 
   document.querySelectorAll('.detail, .node-detail').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
+  });
+
+  /* Click-to-edit: click display text to start editing; blur/Escape ends it */
+  document.querySelectorAll('[data-start-edit]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      editingField = el.getAttribute('data-start-edit');
+      render();
+    });
+  });
+  document.querySelectorAll('[data-field-input]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('blur', ()=>{
+      if(editingField === el.getAttribute('data-field-input')){ editingField = null; render(); }
+    });
+    el.addEventListener('keydown', e=>{
+      if(e.key==='Escape'){
+        /* Reset to the original value first: removing the input from the DOM (via
+           render()) forces a native blur, which fires 'change' if the value differs
+           from focus-time — that would commit the discarded edit unless we revert it. */
+        el.value = el.defaultValue;
+        editingField = null;
+        render();
+      }
+      else if(e.key==='Enter' && el.tagName!=='TEXTAREA'){ e.preventDefault(); el.blur(); }
+    });
+  });
+  if(editingField){
+    const activeInput = document.querySelector('[data-field-input="'+editingField+'"]');
+    if(activeInput){ activeInput.focus(); if(activeInput.select) activeInput.select(); }
+  }
+
+  /* Category-specific extra fields: collapsed summary <-> expanded fields */
+  document.querySelectorAll('[data-expand-fields]').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); extraFieldsExpanded.add(el.getAttribute('data-expand-fields')); render(); });
+  });
+  document.querySelectorAll('[data-collapse-fields]').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); extraFieldsExpanded.delete(el.getAttribute('data-collapse-fields')); editingField = null; render(); });
   });
 }
 
