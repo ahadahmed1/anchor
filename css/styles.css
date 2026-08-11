@@ -315,3 +315,37 @@ input[type=date]:focus, input[type=number]:focus{border-color:var(--cyan);}
 
 /* ---- Extra fields (category-specific) ---- */
 .extra-fields{display:flex;flex-direction:column;gap:10px;margin-bottom:12px;}
+.extra-fields-summary{font-size:12px;color:var(--text-dim);cursor:pointer;padding:7px 9px;background:var(--panel);border:1px dashed var(--border);border-radius:6px;margin-bottom:12px;transition:border-color .12s ease, color .12s ease;}
+.extra-fields-summary:hover{border-color:var(--text-faint);color:var(--text);}
+.collapse-fields-btn{background:none;border:none;color:var(--text-faint);font-family:'JetBrains Mono',monospace;font-size:10.5px;cursor:pointer;padding:2px 0;align-self:flex-start;}
+.collapse-fields-btn:hover{color:var(--text);}
+
+/* ---- Click-to-edit fields (read-first detail views) ---- */
+.field-display{margin:0 0 12px -4px;padding:3px 4px;cursor:pointer;border-radius:6px;transition:background .12s ease;}
+.field-display:hover{background:var(--panel-hover);}
+.field-display-value{margin-top:1px;}
+.field-text{font-size:13px;color:var(--text);line-height:1.5;}
+.field-text.field-empty{color:var(--text-faint);font-style:italic;}
+
+/* ---- Category chip grid (domain category picker) ---- */
+.cat-chip-grid{display:flex;flex-wrap:wrap;gap:6px;}
+
+/* ---- Status chip picker (task items) ---- */
+.status-chip-row{display:flex;flex-wrap:wrap;gap:6px;}
+.status-chip{font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.03em;padding:6px 11px;border-radius:20px;border:1px solid var(--border);background:transparent;color:var(--text-dim);cursor:pointer;transition:all .12s ease;text-transform:uppercase;}
+.status-chip:hover{border-color:var(--text-faint);color:var(--text);}
+.status-chip.not_started.active{background:var(--slate-dim);color:var(--slate-text);border-color:transparent;}
+.status-chip.in_progress.active{background:var(--cyan-dim);color:var(--cyan-text);border-color:transparent;}
+.status-chip.blocked.active{background:var(--amber-dim);color:var(--amber-text);border-color:transparent;}
+.status-chip.done.active{background:var(--green-dim);color:var(--green-text);border-color:transparent;}
+
+/* ---- Recurrence popover ---- */
+.recur-popover{display:flex;flex-direction:column;gap:10px;}
+.chip-row-inline{display:flex;flex-wrap:wrap;gap:6px;}
+
+/* ---- Completion log quick actions ---- */
+.log-actions{display:flex;align-items:center;gap:12px;margin-top:2px;}
+.mark-done-btn{background:var(--green);color:#0B1512;border:none;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:12.5px;padding:9px 16px;border-radius:7px;cursor:pointer;transition:transform .12s ease, box-shadow .12s ease;}
+.mark-done-btn:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(74,222,128,0.25);}
+.add-details-link{background:none;border:none;color:var(--text-faint);font-family:'JetBrains Mono',monospace;font-size:10.5px;cursor:pointer;padding:4px 0;}
+.add-details-link:hover{color:var(--text);}
