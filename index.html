@@ -22,9 +22,6 @@
     document.getElementById('themeColor').setAttribute('content', theme === 'light' ? '#F5F6F8' : '#0F1218');
   })();
 </script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -38,6 +35,10 @@
       <div class="brand-sub">DOMAIN &rarr; GROUP &rarr; ITEM</div>
     </div>
     <div class="topbar-actions">
+      <div class="view-switch" id="topViewSwitch">
+        <button class="on" data-top-view="domains">Domains</button>
+        <button data-top-view="tasks">Tasks</button>
+      </div>
       <button class="install-btn" id="installBtn" hidden>Install</button>
       <div class="seg-toggle" id="themeToggle">
         <button class="seg-opt" data-theme-opt="dark">dark</button>
@@ -60,23 +61,25 @@
     <button class="qa-details-btn" id="qaDetails">+ details</button>
   </div>
 
-  <div class="ledger" id="ledgerStrip"></div>
+  <div id="domainsWidgets">
+    <div class="ledger" id="ledgerStrip"></div>
 
-  <div class="filters">
-    <div class="tab-group" id="healthTabs">
-      <button class="tab active" data-filter="all">all</button>
-      <button class="tab" data-filter="attention">attention</button>
-      <button class="tab" data-filter="on_track">on track</button>
-      <button class="tab" data-filter="done">done</button>
+    <div class="filters">
+      <div class="tab-group" id="healthTabs">
+        <button class="tab active" data-filter="all">all</button>
+        <button class="tab" data-filter="attention">attention</button>
+        <button class="tab" data-filter="on_track">on track</button>
+        <button class="tab" data-filter="done">done</button>
+      </div>
+      <div class="seg-toggle" id="viewToggle">
+        <button class="seg-opt active" data-global-view="list">list</button>
+        <button class="seg-opt" data-global-view="board">board</button>
+      </div>
+      <input class="search-input" id="searchInput" type="text" placeholder="search...">
     </div>
-    <div class="seg-toggle" id="viewToggle">
-      <button class="seg-opt active" data-global-view="list">list</button>
-      <button class="seg-opt" data-global-view="board">board</button>
-    </div>
-    <input class="search-input" id="searchInput" type="text" placeholder="search...">
+
+    <div class="chip-row" id="catChips"></div>
   </div>
-
-  <div class="chip-row" id="catChips"></div>
 
   <div class="grid" id="grid">
     <div class="loading">loading&hellip;</div>
