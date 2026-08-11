@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Project Ledger</title>
-<meta name="description" content="Track projects, epics, stories and tasks in a single offline-first ledger.">
+<title>Anchor</title>
+<meta name="description" content="Track software projects and recurring life maintenance — car, home, health, finances and more — in one offline-first ledger.">
 <meta name="theme-color" id="themeColor" content="#0F1218">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Ledger">
+<meta name="apple-mobile-web-app-title" content="Anchor">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
@@ -33,9 +33,9 @@
     <div class="brand">
       <div class="brand-mark">
         <div class="brand-dot"></div>
-        <h1>Project Ledger</h1>
+        <h1>Anchor</h1>
       </div>
-      <div class="brand-sub">PROJECT → EPIC → STORY → TASK</div>
+      <div class="brand-sub">DOMAIN &rarr; GROUP &rarr; ITEM</div>
     </div>
     <div class="topbar-actions">
       <button class="install-btn" id="installBtn" hidden>Install</button>
@@ -43,19 +43,19 @@
         <button class="seg-opt" data-theme-opt="dark">dark</button>
         <button class="seg-opt" data-theme-opt="light">light</button>
       </div>
-      <button class="new-btn" id="newBtn">+ New project</button>
+      <button class="new-btn" id="newBtn">+ New domain</button>
     </div>
   </div>
 
   <div class="quickadd" id="quickAdd">
     <span class="qa-label">Quick add</span>
-    <div class="seg-toggle mini" id="qaTypeToggle">
-      <button class="seg-opt active" data-qa-type="epic">epic</button>
-      <button class="seg-opt" data-qa-type="story">story</button>
+    <select class="qa-select" id="qaDomain"></select>
+    <select class="qa-select" id="qaGroup"></select>
+    <div class="seg-toggle mini" id="qaKindToggle">
+      <button class="seg-opt active" data-qa-kind="task">one-off</button>
+      <button class="seg-opt" data-qa-kind="recurring">recurring</button>
     </div>
-    <select class="qa-select" id="qaProject"></select>
-    <select class="qa-select" id="qaEpic" style="display:none"></select>
-    <input class="qa-input" type="text" id="qaName" placeholder="Name...">
+    <input class="qa-input" type="text" id="qaName" placeholder="Item name...">
     <button class="qa-btn" id="qaAdd">Add</button>
     <button class="qa-details-btn" id="qaDetails">+ details</button>
   </div>
@@ -63,11 +63,10 @@
   <div class="ledger" id="ledgerStrip"></div>
 
   <div class="filters">
-    <div class="tab-group" id="statusTabs">
+    <div class="tab-group" id="healthTabs">
       <button class="tab active" data-filter="all">all</button>
-      <button class="tab" data-filter="not_started">not started</button>
-      <button class="tab" data-filter="in_progress">in progress</button>
-      <button class="tab" data-filter="blocked">blocked</button>
+      <button class="tab" data-filter="attention">attention</button>
+      <button class="tab" data-filter="on_track">on track</button>
       <button class="tab" data-filter="done">done</button>
     </div>
     <div class="seg-toggle" id="viewToggle">
@@ -77,8 +76,10 @@
     <input class="search-input" id="searchInput" type="text" placeholder="search...">
   </div>
 
+  <div class="chip-row" id="catChips"></div>
+
   <div class="grid" id="grid">
-    <div class="loading">loading ledger…</div>
+    <div class="loading">loading&hellip;</div>
   </div>
 </div>
 

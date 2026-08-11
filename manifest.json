@@ -1,7 +1,7 @@
 {
-  "name": "Project Ledger",
-  "short_name": "Ledger",
-  "description": "Track projects, epics, stories and tasks in a single offline-first ledger.",
+  "name": "Anchor",
+  "short_name": "Anchor",
+  "description": "Track software projects and recurring life maintenance — car, home, health, finances and more — in one offline-first ledger.",
   "id": "./",
   "start_url": ".",
   "scope": ".",
@@ -38,7 +38,7 @@
   ],
   "shortcuts": [
     {
-      "name": "New project",
+      "name": "New domain",
       "short_name": "New",
       "url": "./?action=new"
     }

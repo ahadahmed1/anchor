@@ -1,19 +1,45 @@
+/* ---- Categories ----
+   Drives labels/nouns/extra fields per life area. Adding a category later is a config
+   edit here, not new rendering code. */
+const CATEGORY_ORDER = ['software','home','car','health','finance','appliances','yard','digital'];
+const CATEGORIES = {
+  software:   { label:'Software',      color:'cyan',  groupNoun:'Epic',      itemNoun:'Story', domainFields:[], groupFields:[], itemFields:[] },
+  home:       { label:'Home',          color:'amber', groupNoun:'Area',      itemNoun:'Task',  domainFields:[{key:'address',label:'Address',type:'text'}], groupFields:[], itemFields:[] },
+  car:        { label:'Car',           color:'slate', groupNoun:'Vehicle',   itemNoun:'Task',  domainFields:[], groupFields:[
+                  {key:'make',label:'Make',type:'text'},{key:'model',label:'Model',type:'text'},
+                  {key:'year',label:'Year',type:'text'},{key:'plate',label:'Plate',type:'text'}
+                ], itemFields:[{key:'currentMileage',label:'Current mileage',type:'number'}] },
+  health:     { label:'Health',        color:'green', groupNoun:'Person',    itemNoun:'Item',  domainFields:[], groupFields:[], itemFields:[{key:'provider',label:'Provider',type:'text'}] },
+  finance:    { label:'Finance/Admin', color:'amber', groupNoun:'Account',   itemNoun:'Item',  domainFields:[], groupFields:[], itemFields:[
+                  {key:'account',label:'Account',type:'text'},{key:'cost',label:'Cost',type:'text'}
+                ] },
+  appliances: { label:'Appliances',    color:'slate', groupNoun:'Appliance', itemNoun:'Task',  domainFields:[], groupFields:[], itemFields:[] },
+  yard:       { label:'Yard',          color:'green', groupNoun:'Area',      itemNoun:'Task',  domainFields:[], groupFields:[], itemFields:[] },
+  digital:    { label:'Digital/Admin', color:'cyan',  groupNoun:'Service',   itemNoun:'Item',  domainFields:[], groupFields:[], itemFields:[{key:'account',label:'Account / service',type:'text'}] }
+};
+function catOf(domain){ return CATEGORIES[domain && domain.category] || CATEGORIES.software; }
+
 const STATUS_ORDER = ['not_started','in_progress','blocked','done'];
 const STATUS_LABEL = {not_started:'Not started', in_progress:'In progress', blocked:'Blocked', done:'Done'};
+const HEALTH_LABEL = {attention:'Attention', on_track:'On track', done:'Done'};
+const DUE_LABEL = {overdue:'Overdue', due_soon:'Due soon', upcoming:'Upcoming', unknown:'—', done:'Done'};
+const RECUR_UNIT_LABEL = {days:'day(s)', weeks:'week(s)', months:'month(s)', years:'year(s)', miles:'mile(s)'};
 
-let projects = [];
-let currentFilter = 'all';
-let globalView = 'list';       // 'list' | 'board'
-let storyViewMode = 'tree';    // 'tree' | 'board' (for whichever project is expanded)
+let domains = [];
+let currentHealthFilter = 'all';   // all | attention | on_track | done
+let currentCatFilter = 'all';      // all | software | home | ...
+let globalView = 'list';           // 'list' | 'board'
+let groupViewMode = 'tree';        // 'tree' | 'board' (for whichever domain is expanded)
 let expandedId = null;
-let expandedEpics = new Set();
-let expandedStories = new Set();
+let expandedGroups = new Set();
+let expandedItems = new Set();
 let searchTerm = '';
 
 const grid = document.getElementById('grid');
 const ledgerStrip = document.getElementById('ledgerStrip');
+const catChips = document.getElementById('catChips');
 const toastEl = document.getElementById('toast');
-const statusTabsEl = document.getElementById('statusTabs');
+const healthTabsEl = document.getElementById('healthTabs');
 
 function showToast(msg){
   toastEl.textContent = msg;
@@ -21,57 +47,148 @@ function showToast(msg){
   setTimeout(()=>toastEl.classList.remove('show'), 1800);
 }
 
-function uid(prefix){ return (prefix||'p') + '_' + Math.random().toString(36).slice(2,10); }
+function uid(prefix){ return (prefix||'x') + '_' + Math.random().toString(36).slice(2,10); }
 
-function nextProjectCode(){
-  const nums = projects.map(p => parseInt((p.code||'P-000').split('-')[1],10)).filter(n=>!isNaN(n));
+function nextDomainCode(){
+  const nums = domains.map(d => parseInt((d.code||'D-000').split('-')[1],10)).filter(n=>!isNaN(n));
   const max = nums.length ? Math.max(...nums) : 0;
-  return 'P-' + String(max+1).padStart(3,'0');
+  return 'D-' + String(max+1).padStart(3,'0');
 }
-function nextEpicCode(p){ return 'E-' + ((p.epics||[]).length + 1); }
-function nextStoryCode(e){ return 'S-' + ((e.stories||[]).length + 1); }
+function nextGroupCode(domain){ return 'G-' + ((domain.groups||[]).length + 1); }
+function nextItemCode(container){ return 'I-' + ((container.items||[]).length + 1); }
 
-function statusProgress(status){
-  if(status==='done') return 100;
-  if(status==='blocked') return 40;
-  if(status==='in_progress') return 50;
-  return 0;
+/* ---- Lookup helpers ---- */
+function findDomain(did){ return domains.find(d=>d.id===did); }
+function findGroup(domain, gid){ return domain && gid ? (domain.groups||[]).find(g=>g.id===gid) : null; }
+function locateItem(did, gid, iid){
+  const domain = findDomain(did);
+  if(!domain) return {};
+  if(gid){
+    const group = findGroup(domain, gid);
+    const item = group && (group.items||[]).find(x=>x.id===iid);
+    return {domain, group, item};
+  }
+  const item = (domain.items||[]).find(x=>x.id===iid);
+  return {domain, group:null, item};
 }
-function storyProgress(s){
-  const tasks = s.tasks||[];
-  if(tasks.length) return Math.round((tasks.filter(t=>t.done).length/tasks.length)*100);
-  return statusProgress(s.status);
+function allItemsOf(domain){
+  let items = (domain.items||[]).map(it=>Object.assign({}, it, {_gid:null}));
+  (domain.groups||[]).forEach(g=> items.push(...(g.items||[]).map(it=>Object.assign({}, it, {_gid:g.id}))));
+  return items;
 }
-function epicProgress(e){
-  const stories = e.stories||[];
-  if(stories.length) return Math.round(stories.reduce((sum,s)=>sum+storyProgress(s),0)/stories.length);
-  return statusProgress(e.status);
+
+/* ---- Recurrence & due-date engine ---- */
+const DAY_MS = 86400000;
+function startOfDay(d){ const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function addUnits(date, every, unit){
+  const d = new Date(date);
+  if(unit==='days') d.setDate(d.getDate()+every);
+  else if(unit==='weeks') d.setDate(d.getDate()+every*7);
+  else if(unit==='months') d.setMonth(d.getMonth()+every);
+  else if(unit==='years') d.setFullYear(d.getFullYear()+every);
+  return d;
 }
-function projectProgress(p){
-  const epics = p.epics||[];
-  if(epics.length) return Math.round(epics.reduce((sum,e)=>sum+epicProgress(e),0)/epics.length);
-  const tasks = p.tasks||[];
-  if(tasks.length) return Math.round((tasks.filter(t=>t.done).length/tasks.length)*100);
-  return statusProgress(p.status);
+function nextFixedOccurrence(month, day, from){
+  const year = from.getFullYear();
+  let candidate = startOfDay(new Date(year, (month||1)-1, day||1));
+  if(candidate < startOfDay(from)) candidate = startOfDay(new Date(year+1, (month||1)-1, day||1));
+  return candidate;
 }
-function collectAllTasks(p){
-  let tasks = [...(p.tasks||[])];
-  (p.epics||[]).forEach(e=> (e.stories||[]).forEach(s=> tasks.push(...(s.tasks||[]))));
-  return tasks;
+function latestLogDate(item){
+  const log = item.log||[];
+  return log.reduce((max,l)=> (!max || l.date>max) ? l.date : max, null);
 }
-function breakdownSummary(p){
-  const epics = p.epics||[];
-  const storiesCount = epics.reduce((sum,e)=>sum+(e.stories||[]).length,0);
-  const allTasks = collectAllTasks(p);
-  if(epics.length===0 && (p.tasks||[]).length===0) return 'no breakdown yet';
-  const parts=[];
-  if(epics.length) parts.push(epics.length+' epic'+(epics.length!==1?'s':''));
-  if(storiesCount) parts.push(storiesCount+' stor'+(storiesCount!==1?'ies':'y'));
-  if(allTasks.length) parts.push(allTasks.filter(t=>t.done).length+'/'+allTasks.length+' tasks');
-  return parts.join(' · ') || 'no breakdown yet';
+function latestLogMileage(item){
+  const log = item.log||[];
+  for(let i=0;i<log.length;i++){ if(log[i].meta && log[i].meta.mileage!=null) return log[i].meta.mileage; }
+  return null;
+}
+function dueInfo(item, today){
+  if(item.kind !== 'recurring') return null;
+  today = today || startOfDay(new Date());
+  const rec = item.recurrence || {type:'once', date:null};
+  const lead = item.reminderLeadDays==null ? 14 : Number(item.reminderLeadDays);
+
+  if(rec.type === 'once'){
+    if(item.completedAt) return {dueDate:null, state:'done'};
+    if(!rec.date) return {dueDate:null, state:'unknown'};
+    const due = startOfDay(rec.date);
+    const days = Math.round((due-today)/DAY_MS);
+    return {dueDate: rec.date, state: days<0 ? 'overdue' : days<=lead ? 'due_soon' : 'upcoming'};
+  }
+  if(rec.type === 'fixed'){
+    const due = nextFixedOccurrence(rec.month, rec.day, today);
+    const days = Math.round((due-today)/DAY_MS);
+    return {dueDate: due.toISOString().slice(0,10), state: days<0 ? 'overdue' : days<=lead ? 'due_soon' : 'upcoming'};
+  }
+  /* interval */
+  if(rec.unit === 'miles'){
+    const current = (item.fields && item.fields.currentMileage!=null && item.fields.currentMileage!=='') ? Number(item.fields.currentMileage) : null;
+    if(current==null || isNaN(current)) return {dueDate:null, state:'unknown'};
+    const base = latestLogMileage(item) || 0;
+    const target = base + Number(rec.every||0);
+    const remaining = target - current;
+    const soonWindow = Math.max(Number(rec.every||0) * 0.1, 100);
+    return {dueDate:null, state: remaining<0 ? 'overdue' : remaining<=soonWindow ? 'due_soon' : 'upcoming', targetMileage: target, remaining};
+  }
+  const base = latestLogDate(item) || (item.createdAt ? item.createdAt.slice(0,10) : today.toISOString().slice(0,10));
+  const due = startOfDay(addUnits(new Date(base), Number(rec.every||1), rec.unit||'months'));
+  const days = Math.round((due-today)/DAY_MS);
+  return {dueDate: due.toISOString().slice(0,10), state: days<0 ? 'overdue' : days<=lead ? 'due_soon' : 'upcoming'};
+}
+
+/* ---- Health rollups (computed, never stored) ---- */
+function itemHealth(item){
+  if(item.kind === 'task'){
+    if(item.status==='done') return 'done';
+    if(item.status==='blocked') return 'attention';
+    return 'on_track';
+  }
+  const info = dueInfo(item);
+  if(info.state==='overdue' || info.state==='due_soon') return 'attention';
+  if(info.state==='done') return 'done';
+  return 'on_track';
+}
+function groupHealth(group){
+  const items = group.items||[];
+  if(!items.length) return 'on_track';
+  const hs = items.map(itemHealth);
+  if(hs.includes('attention')) return 'attention';
+  if(hs.every(h=>h==='done')) return 'done';
+  return 'on_track';
+}
+function domainHealth(domain){
+  const items = allItemsOf(domain);
+  if(!items.length) return 'on_track';
+  const hs = items.map(itemHealth);
+  if(hs.includes('attention')) return 'attention';
+  if(hs.every(h=>h==='done')) return 'done';
+  return 'on_track';
+}
+function domainCounts(domain){
+  const counts = {attention:0, on_track:0, done:0};
+  allItemsOf(domain).forEach(it=> counts[itemHealth(it)]++);
+  return counts;
+}
+function domainSummaryText(domain){
+  const groups = (domain.groups||[]).length;
+  const items = allItemsOf(domain).length;
+  if(!items && !groups) return 'empty — add items to get started';
+  const c = domainCounts(domain);
+  const parts = [];
+  if(groups) parts.push(groups+' group'+(groups!==1?'s':''));
+  parts.push(items+' item'+(items!==1?'s':''));
+  if(c.attention) parts.push(c.attention+' need'+(c.attention===1?'s':'')+' attention');
+  return parts.join(' · ');
+}
+function checklistProgress(item){
+  const cl = item.checklist||[];
+  if(cl.length) return Math.round((cl.filter(t=>t.done).length/cl.length)*100);
+  return item.status==='done' ? 100 : item.status==='blocked' ? 40 : item.status==='in_progress' ? 50 : 0;
 }
 
 function timeAgo(iso){
+  if(!iso) return '';
   const d = new Date(iso);
   const diffMs = Date.now() - d.getTime();
   const mins = Math.floor(diffMs/60000);
@@ -85,22 +202,64 @@ function timeAgo(iso){
   return months + 'mo ago';
 }
 
-async function loadProjects(){
+/* ---- Storage + migration ---- */
+async function loadDomains(){
   try{
-    const raw = await Store.get('projects');
-    projects = raw ? JSON.parse(raw) : [];
-  }catch(e){ projects = []; }
+    const raw = await Store.get('domains');
+    if(raw){ domains = JSON.parse(raw); render(); return; }
+  }catch(e){ /* fall through to migration */ }
+  try{
+    const legacyRaw = await Store.get('projects');
+    if(legacyRaw){
+      const legacy = JSON.parse(legacyRaw);
+      domains = legacy.map(migrateLegacyProject);
+      await persist();
+      showToast('migrated your existing projects into Anchor');
+    } else {
+      domains = [];
+    }
+  }catch(e){ domains = []; }
   render();
 }
+function migrateLegacyProject(p){
+  const groups = (p.epics||[]).map(e => ({
+    id: e.id, code: (e.code||'E-0').replace(/^E/,'G'),
+    name: e.name, notes: e.description||'', fields:{},
+    items: (e.stories||[]).map(legacyStoryToItem)
+  }));
+  const items = [];
+  if((p.tasks||[]).length){
+    const allDone = p.tasks.every(t=>t.done);
+    const anyDone = p.tasks.some(t=>t.done);
+    items.push({
+      id: uid('i'), code:'I-0', title:'Quick tasks', notes:'', kind:'task', fields:{},
+      status: allDone ? 'done' : anyDone ? 'in_progress' : 'not_started',
+      checklist: p.tasks.map(t=>({id:t.id, text:t.text, done:t.done}))
+    });
+  }
+  return {
+    id: p.id, code: (p.code||'P-000').replace(/^P/,'D'),
+    name: p.name, category:'software', notes: p.description||'', fields:{},
+    groups, items,
+    createdAt: p.createdAt || new Date().toISOString(),
+    updatedAt: p.updatedAt || new Date().toISOString()
+  };
+}
+function legacyStoryToItem(s){
+  return {
+    id: s.id, code: (s.code||'S-0').replace(/^S/,'I'),
+    title: s.name, notes: s.description||'', kind:'task', fields:{},
+    status: s.status||'not_started',
+    checklist: (s.tasks||[]).map(t=>({id:t.id, text:t.text, done:t.done}))
+  };
+}
 async function persist(){
-  try{ await Store.set('projects', JSON.stringify(projects)); }
+  try{ await Store.set('domains', JSON.stringify(domains)); }
   catch(e){ showToast('save failed — storage blocked'); }
 }
 
 /* ---- Theme ---- */
 async function loadTheme(){
-  /* The inline script in index.html already set data-theme before first paint;
-     this re-derives the same value to sync the toggle buttons. */
   let theme = await Store.get('theme');
   if(!theme){
     theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
@@ -132,180 +291,261 @@ document.querySelectorAll('[data-global-view]').forEach(btn=>{
   });
 });
 
-/* ---- Project CRUD ---- */
-function createProject(){
-  const p = {
-    id: uid('p'), code: nextProjectCode(), name: 'New project', category: 'General',
-    status: 'not_started', description: '', tasks: [], epics: [],
+/* ---- Domain CRUD ---- */
+function createDomain(name, category, notes){
+  category = CATEGORIES[category] ? category : 'software';
+  const d = {
+    id: uid('d'), code: nextDomainCode(), name: name && name.trim() ? name.trim() : 'New domain',
+    category, notes: notes||'', fields:{}, groups:[], items:[],
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
   };
-  projects.unshift(p);
+  domains.unshift(d);
   globalView = 'list';
   document.querySelectorAll('[data-global-view]').forEach(b=>b.classList.toggle('active', b.getAttribute('data-global-view')==='list'));
-  expandedId = p.id;
-  storyViewMode = 'tree';
-  persist(); render();
-  setTimeout(()=>{
-    const el = document.querySelector(`[data-name-input="${p.id}"]`);
-    if(el){ el.focus(); el.select(); }
-  }, 30);
-}
-function updateProject(id, patch){
-  const p = projects.find(x=>x.id===id);
-  if(!p) return;
-  Object.assign(p, patch, {updatedAt: new Date().toISOString()});
+  expandedId = d.id;
+  groupViewMode = 'tree';
   persist(); render();
 }
-function deleteProject(id){
-  projects = projects.filter(x=>x.id!==id);
+function updateDomain(id, patch){
+  const d = findDomain(id);
+  if(!d) return;
+  Object.assign(d, patch, {updatedAt: new Date().toISOString()});
+  persist(); render();
+}
+function updateDomainField(id, key, value){
+  const d = findDomain(id);
+  if(!d) return;
+  d.fields = d.fields || {};
+  d.fields[key] = value;
+  d.updatedAt = new Date().toISOString();
+  persist(); render();
+}
+function deleteDomain(id){
+  domains = domains.filter(x=>x.id!==id);
   if(expandedId===id) expandedId = null;
   persist(); render();
 }
 
-/* ---- Flat project tasks (simple mode) ---- */
-function addTask(pid, text){
+/* ---- Group CRUD ---- */
+function addGroup(did, name, notes){
+  if(!name || !name.trim()) return;
+  const d = findDomain(did);
+  if(!d) return;
+  d.groups = d.groups || [];
+  const g = {id: uid('g'), code: nextGroupCode(d), name: name.trim(), notes: notes||'', fields:{}, items:[]};
+  d.groups.push(g);
+  d.updatedAt = new Date().toISOString();
+  expandedGroups.add(g.id);
+  persist(); render();
+}
+function updateGroup(did, gid, patch){
+  const d = findDomain(did);
+  const g = findGroup(d, gid);
+  if(!g) return;
+  Object.assign(g, patch);
+  d.updatedAt = new Date().toISOString();
+  persist(); render();
+}
+function updateGroupField(did, gid, key, value){
+  const d = findDomain(did);
+  const g = findGroup(d, gid);
+  if(!g) return;
+  g.fields = g.fields || {};
+  g.fields[key] = value;
+  d.updatedAt = new Date().toISOString();
+  persist(); render();
+}
+function deleteGroup(did, gid){
+  const d = findDomain(did);
+  if(!d) return;
+  d.groups = (d.groups||[]).filter(x=>x.id!==gid);
+  expandedGroups.delete(gid);
+  d.updatedAt = new Date().toISOString();
+  persist(); render();
+}
+
+/* ---- Item CRUD ---- */
+function addItem(did, gid, kind, title, status, notes){
+  if(!title || !title.trim()) return;
+  const d = findDomain(did);
+  if(!d) return;
+  const container = gid ? findGroup(d, gid) : d;
+  if(!container) return;
+  container.items = container.items || [];
+  const item = {
+    id: uid('i'), code: nextItemCode(container), title: title.trim(), notes: notes||'',
+    kind: kind==='recurring' ? 'recurring' : 'task', fields:{}
+  };
+  if(item.kind==='task'){
+    item.status = status||'not_started';
+    item.checklist = [];
+  } else {
+    item.recurrence = {type:'interval', every:3, unit:'months'};
+    item.reminderLeadDays = 14;
+    item.completedAt = null;
+    item.log = [];
+  }
+  container.items.push(item);
+  d.updatedAt = new Date().toISOString();
+  expandedItems.add(item.id);
+  persist(); render();
+}
+function updateItem(did, gid, iid, patch){
+  const {domain, item} = locateItem(did, gid, iid);
+  if(!item) return;
+  Object.assign(item, patch);
+  domain.updatedAt = new Date().toISOString();
+  persist(); render();
+}
+function updateItemField(did, gid, iid, key, value){
+  const {domain, item} = locateItem(did, gid, iid);
+  if(!item) return;
+  item.fields = item.fields || {};
+  item.fields[key] = value;
+  domain.updatedAt = new Date().toISOString();
+  persist(); render();
+}
+function deleteItem(did, gid, iid){
+  const d = findDomain(did);
+  if(!d) return;
+  const container = gid ? findGroup(d, gid) : d;
+  if(!container) return;
+  container.items = (container.items||[]).filter(x=>x.id!==iid);
+  expandedItems.delete(iid);
+  d.updatedAt = new Date().toISOString();
+  persist(); render();
+}
+function setItemRecurrenceType(did, gid, iid, type){
+  const {domain, item} = locateItem(did, gid, iid);
+  if(!item) return;
+  if(type==='interval') item.recurrence = {type:'interval', every:3, unit:'months'};
+  else if(type==='fixed') item.recurrence = {type:'fixed', month:1, day:1};
+  else item.recurrence = {type:'once', date: new Date().toISOString().slice(0,10)};
+  domain.updatedAt = new Date().toISOString();
+  persist(); render();
+}
+function updateItemRecurrence(did, gid, iid, patch){
+  const {domain, item} = locateItem(did, gid, iid);
+  if(!item || !item.recurrence) return;
+  Object.assign(item.recurrence, patch);
+  domain.updatedAt = new Date().toISOString();
+  persist(); render();
+}
+
+/* ---- Checklist (kind:'task') ---- */
+function addChecklistItem(did, gid, iid, text){
   if(!text.trim()) return;
-  const p = projects.find(x=>x.id===pid);
-  if(!p) return;
-  p.tasks = p.tasks || [];
-  p.tasks.push({id: uid('t'), text: text.trim(), done:false});
-  p.updatedAt = new Date().toISOString();
+  const {domain, item} = locateItem(did, gid, iid);
+  if(!item) return;
+  item.checklist = item.checklist || [];
+  item.checklist.push({id: uid('c'), text: text.trim(), done:false});
+  domain.updatedAt = new Date().toISOString();
   persist(); render();
 }
-function toggleTask(pid, tid){
-  const p = projects.find(x=>x.id===pid);
-  const t = p && p.tasks.find(x=>x.id===tid);
-  if(!t) return;
-  t.done = !t.done; p.updatedAt = new Date().toISOString();
+function toggleChecklistItem(did, gid, iid, cid){
+  const {domain, item} = locateItem(did, gid, iid);
+  const c = item && (item.checklist||[]).find(x=>x.id===cid);
+  if(!c) return;
+  c.done = !c.done;
+  domain.updatedAt = new Date().toISOString();
   persist(); render();
 }
-function removeTask(pid, tid){
-  const p = projects.find(x=>x.id===pid);
-  if(!p) return;
-  p.tasks = p.tasks.filter(x=>x.id!==tid);
-  p.updatedAt = new Date().toISOString();
-  persist(); render();
-}
-
-/* ---- Epics ---- */
-function addEpic(pid, name, status, description){
-  if(!name.trim()) return;
-  const p = projects.find(x=>x.id===pid);
-  if(!p) return;
-  p.epics = p.epics || [];
-  const epic = {id: uid('e'), code: nextEpicCode(p), name: name.trim(), status: status||'not_started', description: description||'', stories:[]};
-  p.epics.push(epic);
-  p.updatedAt = new Date().toISOString();
-  expandedEpics.add(epic.id);
-  persist(); render();
-}
-function updateEpic(pid, eid, patch){
-  const p = projects.find(x=>x.id===pid);
-  const e = p && (p.epics||[]).find(x=>x.id===eid);
-  if(!e) return;
-  Object.assign(e, patch);
-  p.updatedAt = new Date().toISOString();
-  persist(); render();
-}
-function deleteEpic(pid, eid){
-  const p = projects.find(x=>x.id===pid);
-  if(!p) return;
-  p.epics = (p.epics||[]).filter(x=>x.id!==eid);
-  expandedEpics.delete(eid);
-  p.updatedAt = new Date().toISOString();
+function removeChecklistItem(did, gid, iid, cid){
+  const {domain, item} = locateItem(did, gid, iid);
+  if(!item) return;
+  item.checklist = (item.checklist||[]).filter(x=>x.id!==cid);
+  domain.updatedAt = new Date().toISOString();
   persist(); render();
 }
 
-/* ---- Stories ---- */
-function addStory(pid, eid, name, status, description){
-  if(!name.trim()) return;
-  const p = projects.find(x=>x.id===pid);
-  const e = p && (p.epics||[]).find(x=>x.id===eid);
-  if(!e) return;
-  e.stories = e.stories || [];
-  const story = {id: uid('s'), code: nextStoryCode(e), name: name.trim(), status: status||'not_started', description: description||'', tasks:[]};
-  e.stories.push(story);
-  p.updatedAt = new Date().toISOString();
-  expandedStories.add(story.id);
+/* ---- Log (kind:'recurring') ---- */
+function addLogEntry(did, gid, iid, entry){
+  const {domain, item} = locateItem(did, gid, iid);
+  if(!item) return;
+  item.log = item.log || [];
+  item.log.push({
+    id: uid('l'), date: entry.date || new Date().toISOString().slice(0,10),
+    note: entry.note||'', cost: entry.cost||'',
+    meta: entry.mileage ? {mileage: Number(entry.mileage)} : {}
+  });
+  item.log.sort((a,b)=> a.date < b.date ? 1 : -1);
+  if(item.recurrence && item.recurrence.type==='once') item.completedAt = new Date().toISOString();
+  domain.updatedAt = new Date().toISOString();
   persist(); render();
 }
-function updateStory(pid, eid, sid, patch){
-  const p = projects.find(x=>x.id===pid);
-  const e = p && (p.epics||[]).find(x=>x.id===eid);
-  const s = e && (e.stories||[]).find(x=>x.id===sid);
-  if(!s) return;
-  Object.assign(s, patch);
-  p.updatedAt = new Date().toISOString();
-  persist(); render();
-}
-function deleteStory(pid, eid, sid){
-  const p = projects.find(x=>x.id===pid);
-  const e = p && (p.epics||[]).find(x=>x.id===eid);
-  if(!e) return;
-  e.stories = (e.stories||[]).filter(x=>x.id!==sid);
-  expandedStories.delete(sid);
-  p.updatedAt = new Date().toISOString();
+function removeLogEntry(did, gid, iid, lid){
+  const {domain, item} = locateItem(did, gid, iid);
+  if(!item) return;
+  item.log = (item.log||[]).filter(l=>l.id!==lid);
+  if(item.recurrence && item.recurrence.type==='once' && item.log.length===0) item.completedAt = null;
+  domain.updatedAt = new Date().toISOString();
   persist(); render();
 }
 
-/* ---- Story tasks ---- */
-function addStoryTask(pid, eid, sid, text){
-  if(!text.trim()) return;
-  const p = projects.find(x=>x.id===pid);
-  const e = p && (p.epics||[]).find(x=>x.id===eid);
-  const s = e && (e.stories||[]).find(x=>x.id===sid);
-  if(!s) return;
-  s.tasks = s.tasks || [];
-  s.tasks.push({id: uid('t'), text: text.trim(), done:false});
-  p.updatedAt = new Date().toISOString();
-  persist(); render();
-}
-function toggleStoryTask(pid, eid, sid, tid){
-  const p = projects.find(x=>x.id===pid);
-  const e = p && (p.epics||[]).find(x=>x.id===eid);
-  const s = e && (e.stories||[]).find(x=>x.id===sid);
-  const t = s && s.tasks.find(x=>x.id===tid);
-  if(!t) return;
-  t.done = !t.done; p.updatedAt = new Date().toISOString();
-  persist(); render();
-}
-function removeStoryTask(pid, eid, sid, tid){
-  const p = projects.find(x=>x.id===pid);
-  const e = p && (p.epics||[]).find(x=>x.id===eid);
-  const s = e && (e.stories||[]).find(x=>x.id===sid);
-  if(!s) return;
-  s.tasks = s.tasks.filter(x=>x.id!==tid);
-  p.updatedAt = new Date().toISOString();
-  persist(); render();
-}
-
-/* ---- Modal (add epic / story with details) ---- */
+/* ---- Modal (add group / item with details) ---- */
 let modalState = null;
-function openModal({type, pid, eid, name}){
-  modalState = {type, pid: pid||null, eid: eid||null, name: name||'', status:'not_started', description:''};
+function openModal({type, did, gid, name}){
+  modalState = {type, did: did||null, gid: gid||null, name: name||'', status:'not_started', kind:'task', category:'software', notes:''};
   renderModal();
 }
 function closeModal(){ modalState = null; renderModal(); }
+function categoryOptions(current){
+  return CATEGORY_ORDER.map(k=>`<option value="${k}" ${current===k?'selected':''}>${CATEGORIES[k].label}</option>`).join('');
+}
+function statusOptions(current){
+  return STATUS_ORDER.map(s=>`<option value="${s}" ${current===s?'selected':''}>${STATUS_LABEL[s]}</option>`).join('');
+}
 function renderModal(){
   const root = document.getElementById('modalRoot');
   if(!modalState){ root.innerHTML=''; return; }
-  const project = projects.find(p=>p.id===modalState.pid);
-  let subLabel = project ? `${project.code} — ${escapeHtml(project.name)}` : 'no project selected';
-  if(modalState.type==='story'){
-    const epic = project && (project.epics||[]).find(e=>e.id===modalState.eid);
-    subLabel += epic ? ` / ${epic.code} — ${escapeHtml(epic.name)}` : ' / no epic selected';
+  const domain = modalState.did ? findDomain(modalState.did) : null;
+  const cat = domain ? catOf(domain) : CATEGORIES.software;
+  let title, subLabel, body;
+
+  if(modalState.type === 'domain'){
+    title = 'New domain';
+    subLabel = 'top-level';
+    body = `
+      <div class="field"><span class="field-label">Name</span><input type="text" id="modalName" value="${escapeAttr(modalState.name)}" placeholder="Domain name"></div>
+      <div class="field"><span class="field-label">Category</span><select id="modalCategory">${categoryOptions(modalState.category)}</select></div>
+      <div class="field"><span class="field-label">Notes</span><textarea id="modalDesc" placeholder="Optional details...">${escapeHtml(modalState.notes)}</textarea></div>
+    `;
+  } else if(modalState.type === 'group'){
+    title = 'New ' + cat.groupNoun.toLowerCase();
+    subLabel = domain ? `${domain.code} — ${escapeHtml(domain.name)}` : '';
+    body = `
+      <div class="field"><span class="field-label">Name</span><input type="text" id="modalName" value="${escapeAttr(modalState.name)}" placeholder="${cat.groupNoun} name"></div>
+      <div class="field"><span class="field-label">Notes</span><textarea id="modalDesc" placeholder="Optional details...">${escapeHtml(modalState.notes)}</textarea></div>
+    `;
+  } else {
+    const group = domain && modalState.gid ? findGroup(domain, modalState.gid) : null;
+    title = 'New ' + cat.itemNoun.toLowerCase();
+    subLabel = domain ? `${domain.code} — ${escapeHtml(domain.name)}` + (group ? ` / ${group.code} — ${escapeHtml(group.name)}` : ' / ungrouped') : '';
+    body = `
+      <div class="field"><span class="field-label">Name</span><input type="text" id="modalName" value="${escapeAttr(modalState.name)}" placeholder="${cat.itemNoun} name"></div>
+      <div class="field">
+        <span class="field-label">Type</span>
+        <div class="seg-toggle mini" id="modalKindToggle">
+          <button type="button" class="seg-opt ${modalState.kind==='task'?'active':''}" data-modal-kind="task">one-off task</button>
+          <button type="button" class="seg-opt ${modalState.kind==='recurring'?'active':''}" data-modal-kind="recurring">recurring</button>
+        </div>
+      </div>
+      ${modalState.kind==='task'
+        ? `<div class="field"><span class="field-label">Status</span><select id="modalStatus">${statusOptions(modalState.status)}</select></div>`
+        : `<div class="empty-hint">Recurrence, due dates and completion history are set from the item's detail view after it's created.</div>`}
+      <div class="field"><span class="field-label">Notes</span><textarea id="modalDesc" placeholder="Optional details...">${escapeHtml(modalState.notes)}</textarea></div>
+    `;
   }
+
   root.innerHTML = `
     <div class="modal-overlay" id="modalOverlay">
       <div class="modal">
-        <div class="modal-title">${modalState.type==='epic' ? 'New epic' : 'New story'}</div>
+        <div class="modal-title">${title}</div>
         <div class="modal-sub">${subLabel}</div>
-        <div class="field"><span class="field-label">Name</span><input type="text" id="modalName" value="${escapeAttr(modalState.name)}" placeholder="${modalState.type==='epic'?'Epic name':'Story name'}"></div>
-        <div class="field"><span class="field-label">Status</span><select id="modalStatus">${statusOptions(modalState.status)}</select></div>
-        <div class="field"><span class="field-label">Notes</span><textarea id="modalDesc" placeholder="Optional details...">${escapeHtml(modalState.description)}</textarea></div>
+        ${body}
         <div class="modal-actions">
           <button class="modal-cancel" id="modalCancel">Cancel</button>
-          <button class="modal-save" id="modalSave">Create ${modalState.type}</button>
+          <button class="modal-save" id="modalSave">Create</button>
         </div>
       </div>
     </div>
@@ -313,6 +553,9 @@ function renderModal(){
   document.getElementById('modalOverlay').addEventListener('click', e=>{ if(e.target.id==='modalOverlay') closeModal(); });
   document.getElementById('modalCancel').addEventListener('click', closeModal);
   document.getElementById('modalSave').addEventListener('click', submitModal);
+  document.querySelectorAll('[data-modal-kind]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ modalState.kind = btn.getAttribute('data-modal-kind'); modalState.name = document.getElementById('modalName').value; modalState.notes = document.getElementById('modalDesc').value; renderModal(); });
+  });
   const nameEl = document.getElementById('modalName');
   nameEl.focus(); nameEl.select();
   nameEl.addEventListener('keydown', e=>{
@@ -322,112 +565,117 @@ function renderModal(){
 }
 function submitModal(){
   const name = document.getElementById('modalName').value.trim();
-  const status = document.getElementById('modalStatus').value;
-  const description = document.getElementById('modalDesc').value;
+  const notes = document.getElementById('modalDesc').value;
   if(!name){ showToast('name is required'); return; }
-  if(modalState.type==='epic'){
-    if(!modalState.pid){ showToast('pick a project first'); return; }
-    addEpic(modalState.pid, name, status, description);
-    showToast('epic added');
+  if(modalState.type==='domain'){
+    const category = document.getElementById('modalCategory').value;
+    createDomain(name, category, notes);
+    showToast('domain added');
+  } else if(modalState.type==='group'){
+    if(!modalState.did){ showToast('pick a domain first'); return; }
+    addGroup(modalState.did, name, notes);
+    showToast(catOf(findDomain(modalState.did)).groupNoun.toLowerCase() + ' added');
   } else {
-    if(!modalState.pid || !modalState.eid){ showToast('pick a project and epic first'); return; }
-    addStory(modalState.pid, modalState.eid, name, status, description);
-    showToast('story added');
+    if(!modalState.did){ showToast('pick a domain first'); return; }
+    const status = modalState.kind==='task' ? document.getElementById('modalStatus').value : undefined;
+    addItem(modalState.did, modalState.gid, modalState.kind, name, status, notes);
+    showToast('item added');
   }
   closeModal();
 }
 
 /* ---- Quick add bar ---- */
-let qaType = 'epic';
-let qaProjectId = null;
-let qaEpicId = null;
+let qaKind = 'task';
+let qaDomainId = null;
+let qaGroupId = null;
 function populateQuickAdd(){
-  const projSel = document.getElementById('qaProject');
-  const epicSel = document.getElementById('qaEpic');
+  const domSel = document.getElementById('qaDomain');
+  const grpSel = document.getElementById('qaGroup');
   const addBtn = document.getElementById('qaAdd');
-  if(!projSel) return;
-  if(projects.length){
-    projSel.innerHTML = projects.map(p=>`<option value="${p.id}">${p.code} — ${escapeHtml(p.name)}</option>`).join('');
-    qaProjectId = projects.find(p=>p.id===qaProjectId) ? qaProjectId : projects[0].id;
-    projSel.value = qaProjectId;
+  if(!domSel) return;
+  if(domains.length){
+    domSel.innerHTML = domains.map(d=>`<option value="${d.id}">${d.code} — ${escapeHtml(d.name)}</option>`).join('');
+    qaDomainId = domains.find(d=>d.id===qaDomainId) ? qaDomainId : domains[0].id;
+    domSel.value = qaDomainId;
   } else {
-    projSel.innerHTML = '<option value="">No projects yet</option>';
-    qaProjectId = null;
+    domSel.innerHTML = '<option value="">No domains yet</option>';
+    qaDomainId = null;
   }
-  const project = projects.find(p=>p.id===qaProjectId);
-  const epics = project ? (project.epics||[]) : [];
-  if(epics.length){
-    epicSel.innerHTML = epics.map(e=>`<option value="${e.id}">${e.code} — ${escapeHtml(e.name)}</option>`).join('');
-    qaEpicId = epics.find(e=>e.id===qaEpicId) ? qaEpicId : epics[0].id;
-    epicSel.value = qaEpicId;
-  } else {
-    epicSel.innerHTML = '<option value="">No epics — add one first</option>';
-    qaEpicId = null;
-  }
-  epicSel.style.display = qaType==='story' ? 'inline-block' : 'none';
-  addBtn.disabled = !qaProjectId || (qaType==='story' && !qaEpicId);
+  const domain = findDomain(qaDomainId);
+  const groups = domain ? (domain.groups||[]) : [];
+  const groupNoun = domain ? catOf(domain).groupNoun : 'Group';
+  grpSel.innerHTML = '<option value="">— ungrouped —</option>' + groups.map(g=>`<option value="${g.id}">${g.code} — ${escapeHtml(g.name)}</option>`).join('');
+  qaGroupId = groups.find(g=>g.id===qaGroupId) ? qaGroupId : '';
+  grpSel.value = qaGroupId || '';
+  grpSel.title = groupNoun;
+  addBtn.disabled = !qaDomainId;
 }
 function quickAddSubmit(){
   const nameInput = document.getElementById('qaName');
   const name = nameInput.value.trim();
-  if(!qaProjectId){ showToast('add a project first'); return; }
+  if(!qaDomainId){ showToast('add a domain first'); return; }
   if(!name){ nameInput.focus(); return; }
-  if(qaType==='epic'){
-    addEpic(qaProjectId, name);
-    showToast('epic added');
-  } else {
-    if(!qaEpicId){ showToast('add an epic first'); return; }
-    addStory(qaProjectId, qaEpicId, name);
-    showToast('story added');
-  }
+  addItem(qaDomainId, qaGroupId || null, qaKind, name);
+  showToast('item added');
   nameInput.value='';
   nameInput.focus();
 }
-document.querySelectorAll('[data-qa-type]').forEach(btn=>{
+document.querySelectorAll('[data-qa-kind]').forEach(btn=>{
   btn.addEventListener('click', ()=>{
-    qaType = btn.getAttribute('data-qa-type');
-    document.querySelectorAll('[data-qa-type]').forEach(b=>b.classList.toggle('active', b===btn));
-    populateQuickAdd();
+    qaKind = btn.getAttribute('data-qa-kind');
+    document.querySelectorAll('[data-qa-kind]').forEach(b=>b.classList.toggle('active', b===btn));
   });
 });
-document.getElementById('qaProject').addEventListener('change', e=>{ qaProjectId = e.target.value; populateQuickAdd(); });
-document.getElementById('qaEpic').addEventListener('change', e=>{ qaEpicId = e.target.value; populateQuickAdd(); });
+document.getElementById('qaDomain').addEventListener('change', e=>{ qaDomainId = e.target.value; qaGroupId=''; populateQuickAdd(); });
+document.getElementById('qaGroup').addEventListener('change', e=>{ qaGroupId = e.target.value; });
 document.getElementById('qaName').addEventListener('keydown', e=>{ if(e.key==='Enter'){ quickAddSubmit(); } });
 document.getElementById('qaAdd').addEventListener('click', quickAddSubmit);
 document.getElementById('qaDetails').addEventListener('click', ()=>{
   const name = document.getElementById('qaName').value;
-  if(qaType==='epic'){ openModal({type:'epic', pid:qaProjectId, name}); }
-  else { openModal({type:'story', pid:qaProjectId, eid:qaEpicId, name}); }
+  openModal({type:'item', did:qaDomainId, gid:qaGroupId||null, name});
+  modalState.kind = qaKind;
+  renderModal();
 });
 
 /* ---- Render helpers ---- */
 function renderLedgerStrip(){
-  const total = projects.length;
-  const counts = {not_started:0,in_progress:0,blocked:0,done:0};
-  projects.forEach(p=> counts[p.status] = (counts[p.status]||0)+1);
-  const avgProgress = total ? Math.round(projects.reduce((s,p)=>s+projectProgress(p),0)/total) : 0;
+  const total = domains.length;
+  const counts = {attention:0, on_track:0, done:0};
+  domains.forEach(d=> counts[domainHealth(d)]++);
   ledgerStrip.innerHTML = `
-    <div class="ledger-cell"><div class="ledger-num">${total}</div><div class="ledger-label">Total</div></div>
-    <div class="ledger-cell n-progress"><div class="ledger-num">${counts.in_progress}</div><div class="ledger-label">In progress</div></div>
-    <div class="ledger-cell n-blocked"><div class="ledger-num">${counts.blocked}</div><div class="ledger-label">Blocked</div></div>
+    <div class="ledger-cell"><div class="ledger-num">${total}</div><div class="ledger-label">Domains</div></div>
+    <div class="ledger-cell n-blocked"><div class="ledger-num">${counts.attention}</div><div class="ledger-label">Attention</div></div>
+    <div class="ledger-cell n-progress"><div class="ledger-num">${counts.on_track}</div><div class="ledger-label">On track</div></div>
     <div class="ledger-cell n-done"><div class="ledger-num">${counts.done}</div><div class="ledger-label">Done</div></div>
-    <div class="ledger-cell"><div class="ledger-num">${avgProgress}%</div><div class="ledger-label">Avg progress</div></div>
   `;
 }
-function segBar(pct, status){
-  const totalSegs = 10;
-  const filled = Math.round((pct/100)*totalSegs);
-  let html = '';
-  for(let i=0;i<totalSegs;i++) html += `<div class="seg ${i<filled?'filled '+status:''}"></div>`;
-  return html;
+function renderCatChips(){
+  const chips = ['all', ...CATEGORY_ORDER].map(key=>{
+    const active = currentCatFilter===key;
+    if(key==='all') return `<button class="chip ${active?'active':''}" data-cat-filter="all">all</button>`;
+    const c = CATEGORIES[key];
+    return `<button class="chip ${active?'active':''}" data-cat-filter="${key}"><span class="chip-dot ${c.color}"></span>${c.label}</button>`;
+  }).join('');
+  catChips.innerHTML = chips;
+  document.querySelectorAll('[data-cat-filter]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ currentCatFilter = btn.getAttribute('data-cat-filter'); render(); });
+  });
 }
-function statusOptions(current){
-  return STATUS_ORDER.map(s=>`<option value="${s}" ${current===s?'selected':''}>${STATUS_LABEL[s]}</option>`).join('');
+function healthBadge(health){ return `<span class="badge ${health}">${HEALTH_LABEL[health]}</span>`; }
+function healthNodeBadge(health){ return `<span class="node-badge ${health}">${HEALTH_LABEL[health]}</span>`; }
+function dueBadge(item){
+  const info = dueInfo(item);
+  if(!info) return '';
+  let extra = '';
+  if(info.dueDate) extra = ' · ' + info.dueDate;
+  else if(info.remaining!=null) extra = info.remaining<0 ? ` · ${Math.abs(Math.round(info.remaining))} mi over` : ` · ${Math.round(info.remaining)} mi left`;
+  return `<span class="due-chip ${info.state}">${DUE_LABEL[info.state]}${extra}</span>`;
 }
-function matchesFilter(p){
-  if(currentFilter!=='all' && p.status!==currentFilter) return false;
+function matchesFilter(d){
+  if(currentHealthFilter!=='all' && domainHealth(d)!==currentHealthFilter) return false;
+  if(currentCatFilter!=='all' && d.category!==currentCatFilter) return false;
   if(searchTerm){
-    const hay = (p.name+' '+p.category+' '+p.description).toLowerCase();
+    const hay = (d.name+' '+d.category+' '+(d.notes||'')+' '+JSON.stringify(d.fields||{})).toLowerCase();
     if(!hay.includes(searchTerm.toLowerCase())) return false;
   }
   return true;
@@ -436,53 +684,60 @@ function escapeHtml(str){
   return (str||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 }
 function escapeAttr(str){ return escapeHtml(str); }
+function renderExtraFields(configFields, values, dataAttr, pathKey){
+  if(!configFields || !configFields.length) return '';
+  values = values || {};
+  return `<div class="extra-fields">${configFields.map(f=>`
+    <div class="field"><span class="field-label">${escapeHtml(f.label)}</span>
+      <input type="${f.type==='number'?'number':'text'}" value="${escapeAttr(values[f.key]!=null?String(values[f.key]):'')}" data-${dataAttr}="${pathKey}|${f.key}">
+    </div>
+  `).join('')}</div>`;
+}
 
 /* ---- Main render ---- */
 function render(){
   renderLedgerStrip();
+  renderCatChips();
   populateQuickAdd();
-  statusTabsEl.classList.toggle('disabled', globalView==='board');
+  healthTabsEl.classList.toggle('disabled', globalView==='board');
 
   if(globalView==='board'){
     grid.classList.add('board-mode');
     grid.innerHTML = renderGlobalBoard();
   } else {
     grid.classList.remove('board-mode');
-    const visible = projects.filter(matchesFilter);
+    const visible = domains.filter(matchesFilter);
     if(visible.length===0){
       grid.innerHTML = `<div class="empty-state">
-        <div class="em-title">${projects.length===0 ? 'No projects yet' : 'Nothing matches that filter'}</div>
-        <div>${projects.length===0 ? 'Add your first project to start tracking it.' : 'Try a different status or search term.'}</div>
+        <div class="em-title">${domains.length===0 ? 'No domains yet' : 'Nothing matches that filter'}</div>
+        <div>${domains.length===0 ? 'Add your first domain — a project, or a life area like Car or Home — to start tracking it.' : 'Try a different filter or search term.'}</div>
       </div>`;
       attachHandlers();
       return;
     }
-    grid.innerHTML = visible.map(p=>{
-      const pct = projectProgress(p);
-      const isOpen = expandedId===p.id;
+    grid.innerHTML = visible.map(d=>{
+      const health = domainHealth(d);
+      const isOpen = expandedId===d.id;
+      const cat = catOf(d);
       return `
         <div class="card">
-          <div class="status-stripe ${p.status}"></div>
-          <div class="card-body" data-toggle="${p.id}">
+          <div class="status-stripe ${health}"></div>
+          <div class="card-body" data-toggle-domain="${d.id}">
             <div class="card-top">
               <div class="card-titles">
-                <div class="card-code">${p.code}</div>
-                <div class="card-name">${escapeHtml(p.name)}</div>
+                <div class="card-code">${d.code}</div>
+                <div class="card-name">${escapeHtml(d.name)}</div>
               </div>
-              <div class="badge ${p.status}">${STATUS_LABEL[p.status]}</div>
+              ${healthBadge(health)}
             </div>
-            <div class="card-cat">${escapeHtml(p.category||'General')}</div>
-            ${p.description ? `<div class="card-desc">${escapeHtml(p.description)}</div>` : ''}
-            <div class="progress-row">
-              <div class="segbar">${segBar(pct, p.status)}</div>
-              <div class="progress-pct">${pct}%</div>
-            </div>
+            <div class="card-cat"><span class="chip-dot ${cat.color}"></span>${cat.label}</div>
+            ${d.notes ? `<div class="card-desc">${escapeHtml(d.notes)}</div>` : ''}
             <div class="card-meta">
-              <div class="task-count">${breakdownSummary(p)}</div>
-              <div class="updated">${timeAgo(p.updatedAt)}</div>
+              <div class="task-count">${domainSummaryText(d)}</div>
+              <div class="updated">${timeAgo(d.updatedAt)}</div>
             </div>
           </div>
-          ${isOpen ? renderDetail(p) : ''}
+          ${isOpen ? renderDomainDetail(d) : ''}
         </div>
       `;
     }).join('');
@@ -490,392 +745,489 @@ function render(){
   attachHandlers();
 }
 
+const HEALTH_ORDER = ['attention','on_track','done'];
 function renderGlobalBoard(){
   const term = searchTerm.toLowerCase();
-  const filtered = projects.filter(p=> !term || (p.name+' '+p.category+' '+p.description).toLowerCase().includes(term));
+  const filtered = domains.filter(d=> (currentCatFilter==='all'||d.category===currentCatFilter) && (!term || (d.name+' '+d.category+' '+(d.notes||'')).toLowerCase().includes(term)));
   let html = '<div class="board">';
-  STATUS_ORDER.forEach(status=>{
-    const items = filtered.filter(p=>p.status===status);
+  HEALTH_ORDER.forEach(health=>{
+    const items = filtered.filter(d=>domainHealth(d)===health);
     html += `<div class="board-col">
-      <div class="board-col-head"><span class="board-col-dot ${status}"></span>${STATUS_LABEL[status]}<span class="board-col-count">${items.length}</span></div>
-      <div class="board-col-body" data-drop-zone="${status}">
-        ${items.length ? items.map(p=>renderBoardProjectCard(p)).join('') : '<div class="empty-hint">nothing here</div>'}
+      <div class="board-col-head"><span class="board-col-dot ${health}"></span>${HEALTH_LABEL[health]}<span class="board-col-count">${items.length}</span></div>
+      <div class="board-col-body">
+        ${items.length ? items.map(d=>renderBoardDomainCard(d)).join('') : '<div class="empty-hint">nothing here</div>'}
       </div>
     </div>`;
   });
   html += '</div>';
   return html;
 }
-function renderBoardProjectCard(p){
-  const pct = projectProgress(p);
-  return `<div class="board-card" draggable="true" data-drag-project="${p.id}">
-    <div class="board-card-code">${p.code}</div>
-    <div class="board-card-name">${escapeHtml(p.name)}</div>
-    <div class="board-card-sub">${escapeHtml(p.category||'General')} · ${pct}% · ${breakdownSummary(p)}</div>
+function renderBoardDomainCard(d){
+  const cat = catOf(d);
+  return `<div class="board-card" data-open-domain="${d.id}">
+    <div class="board-card-code">${d.code}</div>
+    <div class="board-card-name">${escapeHtml(d.name)}</div>
+    <div class="board-card-sub"><span class="chip-dot ${cat.color}"></span>${cat.label} · ${domainSummaryText(d)}</div>
   </div>`;
 }
 
-function renderDetail(p){
-  const tasksHtml = (p.tasks||[]).map(t=>`
-    <div class="task-item">
-      <div class="task-check ${t.done?'checked':''}" data-toggle-task="${p.id}|${t.id}">
-        <svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-6" stroke="#0B1512" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </div>
-      <div class="task-text ${t.done?'done':''}">${escapeHtml(t.text)}</div>
-      <button class="task-del" data-remove-task="${p.id}|${t.id}">&times;</button>
-    </div>
-  `).join('');
-
-  const hasEpics = (p.epics||[]).length > 0;
-
+function renderDomainDetail(d){
+  const cat = catOf(d);
+  const hasGroups = (d.groups||[]).length > 0;
+  const ungroupedItems = d.items||[];
   return `
     <div class="detail">
       <div class="field">
         <span class="field-label">Name</span>
-        <input type="text" value="${escapeAttr(p.name)}" data-edit-name="${p.id}" data-name-input="${p.id}">
+        <input type="text" value="${escapeAttr(d.name)}" data-edit-domain-name="${d.id}" data-name-input="${d.id}">
       </div>
       <div class="field-row">
         <div class="field">
           <span class="field-label">Category</span>
-          <input type="text" value="${escapeAttr(p.category||'')}" data-edit-category="${p.id}">
-        </div>
-        <div class="field">
-          <span class="field-label">Status</span>
-          <select data-edit-status="${p.id}">${statusOptions(p.status)}</select>
+          <select data-edit-domain-category="${d.id}">${categoryOptions(d.category)}</select>
         </div>
       </div>
       <div class="field">
         <span class="field-label">Notes</span>
-        <textarea data-edit-description="${p.id}" placeholder="What is this project, and where does it stand?">${escapeHtml(p.description||'')}</textarea>
+        <textarea data-edit-domain-notes="${d.id}" placeholder="What is this domain, and where does it stand?">${escapeHtml(d.notes||'')}</textarea>
       </div>
-
-      <div class="field">
-        <span class="field-label">Quick tasks (for simple projects)</span>
-        <div class="tasks-list">${tasksHtml}</div>
-        <div class="add-task-row"><input type="text" placeholder="Add a task and press enter" data-add-task="${p.id}"></div>
-      </div>
+      ${renderExtraFields(cat.domainFields, d.fields, 'edit-domain-field', d.id)}
 
       <div class="subsection">
         <div class="subsection-head">
-          <span class="field-label">Epics & stories</span>
+          <span class="field-label">Groups &amp; items</span>
           <div class="seg-toggle mini">
-            <button class="seg-opt ${storyViewMode==='tree'?'active':''}" data-story-view="tree">tree</button>
-            <button class="seg-opt ${storyViewMode==='board'?'active':''}" data-story-view="board">board</button>
+            <button class="seg-opt ${groupViewMode==='tree'?'active':''}" data-group-view="tree">tree</button>
+            <button class="seg-opt ${groupViewMode==='board'?'active':''}" data-group-view="board">board</button>
           </div>
         </div>
-        ${storyViewMode==='board' ? renderStoryBoard(p) : `
+        ${groupViewMode==='board' ? renderItemsBoard(d) : `
           <div class="node-list">
-            ${hasEpics ? (p.epics||[]).map(e=>renderEpicRow(p,e)).join('') : '<div class="empty-hint">No epics yet — break this project into epics and stories.</div>'}
+            ${ungroupedItems.length ? ungroupedItems.map(it=>renderItemNode(d,null,it)).join('') : ''}
+            ${hasGroups ? (d.groups||[]).map(g=>renderGroupNode(d,g)).join('') : ''}
+            ${(!ungroupedItems.length && !hasGroups) ? `<div class="empty-hint">No ${cat.itemNoun.toLowerCase()}s yet.</div>` : ''}
           </div>
-          <button class="add-node-btn" data-open-epic-modal="${p.id}">+ Add epic</button>
+          <button class="add-node-btn" data-open-item-modal="${d.id}|">+ Add ${cat.itemNoun.toLowerCase()}</button>
+          <button class="add-node-btn" data-open-group-modal="${d.id}">+ Add ${cat.groupNoun.toLowerCase()}</button>
         `}
       </div>
 
       <div class="detail-footer">
-        <button class="delete-btn" data-delete="${p.id}">delete project</button>
-        <button class="close-btn" data-collapse="${p.id}">Done editing</button>
+        <button class="delete-btn" data-delete-domain="${d.id}">delete domain</button>
+        <button class="close-btn" data-collapse-domain="${d.id}">Done editing</button>
       </div>
     </div>
   `;
 }
 
-function renderStoryBoard(p){
-  let allStories = [];
-  (p.epics||[]).forEach(e=> (e.stories||[]).forEach(s=> allStories.push(Object.assign({}, s, {_epicCode:e.code, _epicId:e.id}))));
+function renderItemsBoard(d){
+  const items = allItemsOf(d);
   let html = '<div class="board story-board">';
-  STATUS_ORDER.forEach(status=>{
-    const items = allStories.filter(s=>s.status===status);
+  HEALTH_ORDER.forEach(health=>{
+    const inCol = items.filter(it=>itemHealth(it)===health);
     html += `<div class="board-col">
-      <div class="board-col-head"><span class="board-col-dot ${status}"></span>${STATUS_LABEL[status]}<span class="board-col-count">${items.length}</span></div>
-      <div class="board-col-body" data-drop-zone-story="${p.id}|${status}">
-        ${items.length ? items.map(s=>renderBoardStoryCard(p,s)).join('') : '<div class="empty-hint">nothing here</div>'}
+      <div class="board-col-head"><span class="board-col-dot ${health}"></span>${HEALTH_LABEL[health]}<span class="board-col-count">${inCol.length}</span></div>
+      <div class="board-col-body" data-drop-zone-item="${d.id}|${health}">
+        ${inCol.length ? inCol.map(it=>renderBoardItemCard(d,it)).join('') : '<div class="empty-hint">nothing here</div>'}
       </div>
     </div>`;
   });
   html += '</div>';
-  if(allStories.length===0) html += '<div class="empty-hint">Switch to tree view to add epics and stories first.</div>';
+  if(items.length===0) html += '<div class="empty-hint">Switch to tree view to add items first.</div>';
   return html;
 }
-function renderBoardStoryCard(p, s){
-  const pct = storyProgress(s);
-  const tasks = s.tasks||[];
-  return `<div class="board-card" draggable="true" data-drag-story="${p.id}|${s._epicId}|${s.id}">
-    <div class="board-card-code">${s._epicCode} · ${s.code}</div>
-    <div class="board-card-name">${escapeHtml(s.name)}</div>
-    <div class="board-card-sub">${tasks.length ? tasks.filter(t=>t.done).length+'/'+tasks.length+' tasks' : pct+'%'}</div>
+function renderBoardItemCard(d, it){
+  const sub = it.kind==='task' ? checklistProgress(it)+'%' : dueBadge(it);
+  const draggable = it.kind==='task';
+  return `<div class="board-card" data-open-item="${d.id}|${it._gid||''}|${it.id}" ${draggable?`draggable="true" data-drag-item="${d.id}|${it._gid||''}|${it.id}"`:''}>
+    <div class="board-card-code">${it.code}</div>
+    <div class="board-card-name">${escapeHtml(it.title)}</div>
+    <div class="board-card-sub">${sub}</div>
   </div>`;
 }
 
-function renderEpicRow(p, e){
-  const isOpen = expandedEpics.has(e.id);
-  const pct = epicProgress(e);
-  const storiesHtml = (e.stories||[]).length
-    ? (e.stories||[]).map(s=>renderStoryRow(p,e,s)).join('')
-    : '<div class="empty-hint">No stories yet.</div>';
+function renderGroupNode(d, g){
+  const isOpen = expandedGroups.has(g.id);
+  const health = groupHealth(g);
+  const cat = catOf(d);
+  const itemsHtml = (g.items||[]).length
+    ? (g.items||[]).map(it=>renderItemNode(d,g,it)).join('')
+    : `<div class="empty-hint">No ${cat.itemNoun.toLowerCase()}s yet.</div>`;
   return `
     <div class="node epic-node">
-      <div class="node-stripe ${e.status}"></div>
-      <div class="node-row" data-toggle-epic="${e.id}">
+      <div class="node-stripe ${health}"></div>
+      <div class="node-row" data-toggle-group="${g.id}">
         <span class="node-caret ${isOpen?'open':''}">&rsaquo;</span>
-        <span class="node-code">${e.code}</span>
-        <span class="node-name">${escapeHtml(e.name)}</span>
-        <span class="node-badge ${e.status}">${STATUS_LABEL[e.status]}</span>
-        <span class="node-pct">${pct}%</span>
+        <span class="node-code">${g.code}</span>
+        <span class="node-name">${escapeHtml(g.name)}</span>
+        ${healthNodeBadge(health)}
       </div>
       ${isOpen ? `
         <div class="node-detail">
-          <div class="field-row">
-            <div class="field"><span class="field-label">Name</span><input type="text" value="${escapeAttr(e.name)}" data-edit-epic-name="${p.id}|${e.id}"></div>
-            <div class="field"><span class="field-label">Status</span><select data-edit-epic-status="${p.id}|${e.id}">${statusOptions(e.status)}</select></div>
-          </div>
-          <div class="field"><span class="field-label">Notes</span><textarea data-edit-epic-desc="${p.id}|${e.id}" placeholder="What does this epic cover?">${escapeHtml(e.description||'')}</textarea></div>
+          <div class="field"><span class="field-label">Name</span><input type="text" value="${escapeAttr(g.name)}" data-edit-group-name="${d.id}|${g.id}"></div>
+          <div class="field"><span class="field-label">Notes</span><textarea data-edit-group-notes="${d.id}|${g.id}" placeholder="What does this ${cat.groupNoun.toLowerCase()} cover?">${escapeHtml(g.notes||'')}</textarea></div>
+          ${renderExtraFields(cat.groupFields, g.fields, 'edit-group-field', d.id+'|'+g.id)}
           <div class="subsection">
-            <span class="field-label">Stories</span>
-            <div class="node-list">${storiesHtml}</div>
-            <button class="add-node-btn" data-open-story-modal="${p.id}|${e.id}">+ Add story</button>
+            <span class="field-label">${cat.itemNoun}s</span>
+            <div class="node-list">${itemsHtml}</div>
+            <button class="add-node-btn" data-open-item-modal="${d.id}|${g.id}">+ Add ${cat.itemNoun.toLowerCase()}</button>
           </div>
-          <div class="node-footer"><button class="delete-btn" data-delete-epic="${p.id}|${e.id}">delete epic</button></div>
+          <div class="node-footer"><button class="delete-btn" data-delete-group="${d.id}|${g.id}">delete ${cat.groupNoun.toLowerCase()}</button></div>
         </div>
       ` : ''}
     </div>
   `;
 }
 
-function renderStoryRow(p, e, s){
-  const isOpen = expandedStories.has(s.id);
-  const pct = storyProgress(s);
-  const tasks = s.tasks||[];
-  const doneCount = tasks.filter(t=>t.done).length;
-  const tasksHtml = tasks.map(t=>`
-    <div class="task-item">
-      <div class="task-check ${t.done?'checked':''}" data-toggle-story-task="${p.id}|${e.id}|${s.id}|${t.id}">
-        <svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-6" stroke="#0B1512" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </div>
-      <div class="task-text ${t.done?'done':''}">${escapeHtml(t.text)}</div>
-      <button class="task-del" data-remove-story-task="${p.id}|${e.id}|${s.id}|${t.id}">&times;</button>
-    </div>
-  `).join('');
+function renderItemNode(d, g, it){
+  const isOpen = expandedItems.has(it.id);
+  const gid = g ? g.id : '';
+  const health = itemHealth(it);
+  const cat = catOf(d);
+  const rightBit = it.kind==='task' ? `<span class="node-pct">${checklistProgress(it)}%</span>` : dueBadge(it);
   return `
     <div class="node story-node">
-      <div class="node-stripe ${s.status}"></div>
-      <div class="node-row" data-toggle-story="${s.id}">
+      <div class="node-stripe ${health}"></div>
+      <div class="node-row" data-toggle-item="${d.id}|${gid}|${it.id}">
         <span class="node-caret ${isOpen?'open':''}">&rsaquo;</span>
-        <span class="node-code">${s.code}</span>
-        <span class="node-name">${escapeHtml(s.name)}</span>
-        <span class="node-badge ${s.status}">${STATUS_LABEL[s.status]}</span>
-        <span class="node-pct">${tasks.length ? doneCount+'/'+tasks.length : pct+'%'}</span>
+        <span class="node-code">${it.code}</span>
+        <span class="node-name">${escapeHtml(it.title)}</span>
+        ${it.kind==='task' ? `<span class="node-badge ${it.status}">${STATUS_LABEL[it.status]}</span>` : ''}
+        ${rightBit}
       </div>
-      ${isOpen ? `
-        <div class="node-detail">
-          <div class="field-row">
-            <div class="field"><span class="field-label">Name</span><input type="text" value="${escapeAttr(s.name)}" data-edit-story-name="${p.id}|${e.id}|${s.id}"></div>
-            <div class="field"><span class="field-label">Status</span><select data-edit-story-status="${p.id}|${e.id}|${s.id}">${statusOptions(s.status)}</select></div>
-          </div>
-          <div class="field"><span class="field-label">Notes</span><textarea data-edit-story-desc="${p.id}|${e.id}|${s.id}" placeholder="Details for this story...">${escapeHtml(s.description||'')}</textarea></div>
-          <div class="tasks-list">${tasksHtml}</div>
-          <div class="add-task-row"><input type="text" placeholder="Add a task and press enter" data-add-story-task="${p.id}|${e.id}|${s.id}"></div>
-          <div class="node-footer"><button class="delete-btn" data-delete-story="${p.id}|${e.id}|${s.id}">delete story</button></div>
+      ${isOpen ? renderItemDetail(d,g,it) : ''}
+    </div>
+  `;
+}
+
+function renderItemDetail(d, g, it){
+  const gid = g ? g.id : '';
+  const key = `${d.id}|${gid}|${it.id}`;
+  const cat = catOf(d);
+  const common = `
+    <div class="field-row">
+      <div class="field"><span class="field-label">Name</span><input type="text" value="${escapeAttr(it.title)}" data-edit-item-title="${key}"></div>
+    </div>
+    <div class="field"><span class="field-label">Notes</span><textarea data-edit-item-notes="${key}" placeholder="Details...">${escapeHtml(it.notes||'')}</textarea></div>
+    ${renderExtraFields(cat.itemFields, it.fields, 'edit-item-field', key)}
+  `;
+  let kindBlock;
+  if(it.kind==='task'){
+    const checklistHtml = (it.checklist||[]).map(t=>`
+      <div class="task-item">
+        <div class="task-check ${t.done?'checked':''}" data-toggle-checklist="${key}|${t.id}">
+          <svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-6" stroke="#0B1512" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
-      ` : ''}
+        <div class="task-text ${t.done?'done':''}">${escapeHtml(t.text)}</div>
+        <button class="task-del" data-remove-checklist="${key}|${t.id}">&times;</button>
+      </div>
+    `).join('');
+    kindBlock = `
+      <div class="field"><span class="field-label">Status</span><select data-edit-item-status="${key}">${statusOptions(it.status)}</select></div>
+      <div class="field">
+        <span class="field-label">Checklist</span>
+        <div class="tasks-list">${checklistHtml}</div>
+        <div class="add-task-row"><input type="text" placeholder="Add a checklist item and press enter" data-add-checklist="${key}"></div>
+      </div>
+    `;
+  } else {
+    const rec = it.recurrence || {type:'interval', every:3, unit:'months'};
+    let recFields = '';
+    if(rec.type==='interval'){
+      recFields = `
+        <div class="recur-row">
+          <div class="field"><span class="field-label">Every</span><input type="number" min="1" value="${rec.every}" data-edit-recur-every="${key}"></div>
+          <div class="field"><span class="field-label">Unit</span><select data-edit-recur-unit="${key}">
+            ${['days','weeks','months','years','miles'].map(u=>`<option value="${u}" ${rec.unit===u?'selected':''}>${RECUR_UNIT_LABEL[u]}</option>`).join('')}
+          </select></div>
+        </div>
+      `;
+    } else if(rec.type==='fixed'){
+      recFields = `
+        <div class="recur-row">
+          <div class="field"><span class="field-label">Month</span><input type="number" min="1" max="12" value="${rec.month}" data-edit-recur-month="${key}"></div>
+          <div class="field"><span class="field-label">Day</span><input type="number" min="1" max="31" value="${rec.day}" data-edit-recur-day="${key}"></div>
+        </div>
+      `;
+    } else {
+      recFields = `
+        <div class="recur-row">
+          <div class="field"><span class="field-label">Date</span><input type="date" value="${rec.date||''}" data-edit-recur-date="${key}"></div>
+        </div>
+      `;
+    }
+    const logHtml = (it.log||[]).map(l=>`
+      <div class="log-item">
+        <div class="log-item-body">
+          <div class="log-item-date">${l.date}</div>
+          ${l.note ? `<div class="log-item-note">${escapeHtml(l.note)}</div>` : ''}
+          ${(l.cost || (l.meta&&l.meta.mileage!=null)) ? `<div class="log-item-meta">${l.cost?escapeHtml(l.cost):''}${l.cost && l.meta&&l.meta.mileage!=null?' · ':''}${l.meta&&l.meta.mileage!=null?l.meta.mileage+' mi':''}</div>` : ''}
+        </div>
+        <button class="task-del" data-remove-log="${key}|${l.id}">&times;</button>
+      </div>
+    `).join('');
+    kindBlock = `
+      <div class="due-summary">${dueBadge(it)}</div>
+      <div class="field">
+        <span class="field-label">Recurrence</span>
+        <div class="seg-toggle mini" data-recur-type-toggle="${key}">
+          <button class="seg-opt ${rec.type==='interval'?'active':''}" data-set-recur-type="${key}|interval">interval</button>
+          <button class="seg-opt ${rec.type==='fixed'?'active':''}" data-set-recur-type="${key}|fixed">fixed date</button>
+          <button class="seg-opt ${rec.type==='once'?'active':''}" data-set-recur-type="${key}|once">one-off</button>
+        </div>
+        ${recFields}
+      </div>
+      <div class="field"><span class="field-label">Remind me (days before due)</span><input type="number" min="0" value="${it.reminderLeadDays==null?14:it.reminderLeadDays}" data-edit-lead-days="${key}"></div>
+      <div class="field">
+        <span class="field-label">Completion log</span>
+        <div class="log-list">${logHtml || '<div class="empty-hint">Nothing logged yet.</div>'}</div>
+        <div class="add-log-row">
+          <input type="date" id="logDate-${it.id}" value="${new Date().toISOString().slice(0,10)}">
+          <input type="text" id="logNote-${it.id}" placeholder="Note (optional)">
+          <input type="text" id="logCost-${it.id}" placeholder="Cost (optional)">
+          ${rec.unit==='miles' ? `<input type="number" id="logMileage-${it.id}" placeholder="Mileage">` : ''}
+          <button class="qa-btn" data-add-log="${key}">Log done</button>
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div class="node-detail">
+      ${common}
+      ${kindBlock}
+      <div class="node-footer"><button class="delete-btn" data-delete-item="${key}">delete ${cat.itemNoun.toLowerCase()}</button></div>
     </div>
   `;
 }
 
 function attachHandlers(){
-  document.querySelectorAll('[data-toggle]').forEach(el=>{
+  /* Domain */
+  document.querySelectorAll('[data-toggle-domain]').forEach(el=>{
     el.addEventListener('click', ()=>{
-      const id = el.getAttribute('data-toggle');
-      if(expandedId !== id){ storyViewMode = 'tree'; }
+      const id = el.getAttribute('data-toggle-domain');
+      if(expandedId !== id){ groupViewMode = 'tree'; }
       expandedId = expandedId===id ? null : id;
       render();
     });
   });
-  document.querySelectorAll('[data-collapse]').forEach(el=>{
+  document.querySelectorAll('[data-collapse-domain]').forEach(el=>{
     el.addEventListener('click', e=>{ e.stopPropagation(); expandedId = null; render(); });
   });
-  document.querySelectorAll('[data-delete]').forEach(el=>{
+  document.querySelectorAll('[data-delete-domain]').forEach(el=>{
     el.addEventListener('click', e=>{
       e.stopPropagation();
-      const id = el.getAttribute('data-delete');
-      const p = projects.find(x=>x.id===id);
-      if(confirm(`Delete "${p?p.name:'this project'}"? This can't be undone.`)){
-        deleteProject(id); showToast('project deleted');
+      const id = el.getAttribute('data-delete-domain');
+      const d = findDomain(id);
+      if(confirm(`Delete "${d?d.name:'this domain'}"? This can't be undone.`)){
+        deleteDomain(id); showToast('domain deleted');
       }
     });
   });
-  document.querySelectorAll('[data-edit-name]').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=> updateProject(el.getAttribute('data-edit-name'), {name: el.value || 'Untitled project'}));
-  });
-  document.querySelectorAll('[data-edit-category]').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=> updateProject(el.getAttribute('data-edit-category'), {category: el.value}));
-  });
-  document.querySelectorAll('[data-edit-status]').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=> updateProject(el.getAttribute('data-edit-status'), {status: el.value}));
-  });
-  document.querySelectorAll('[data-edit-description]').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=> updateProject(el.getAttribute('data-edit-description'), {description: el.value}));
-  });
-  document.querySelectorAll('[data-add-task]').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ addTask(el.getAttribute('data-add-task'), el.value); el.value=''; } });
-  });
-  document.querySelectorAll('[data-toggle-task]').forEach(el=>{
-    el.addEventListener('click', e=>{ e.stopPropagation(); const [pid,tid]=el.getAttribute('data-toggle-task').split('|'); toggleTask(pid,tid); });
-  });
-  document.querySelectorAll('[data-remove-task]').forEach(el=>{
-    el.addEventListener('click', e=>{ e.stopPropagation(); const [pid,tid]=el.getAttribute('data-remove-task').split('|'); removeTask(pid,tid); });
-  });
-
-  document.querySelectorAll('[data-story-view]').forEach(el=>{
-    el.addEventListener('click', e=>{
-      e.stopPropagation();
-      storyViewMode = el.getAttribute('data-story-view');
-      render();
-    });
-  });
-
-  document.querySelectorAll('[data-toggle-epic]').forEach(el=>{
+  document.querySelectorAll('[data-open-domain]').forEach(el=>{
     el.addEventListener('click', ()=>{
-      const id = el.getAttribute('data-toggle-epic');
-      if(expandedEpics.has(id)) expandedEpics.delete(id); else expandedEpics.add(id);
+      const id = el.getAttribute('data-open-domain');
+      globalView = 'list';
+      document.querySelectorAll('[data-global-view]').forEach(b=>b.classList.toggle('active', b.getAttribute('data-global-view')==='list'));
+      groupViewMode = 'tree';
+      expandedId = id;
       render();
     });
   });
-  document.querySelectorAll('[data-open-epic-modal]').forEach(el=>{
-    el.addEventListener('click', e=>{ e.stopPropagation(); openModal({type:'epic', pid: el.getAttribute('data-open-epic-modal')}); });
+  document.querySelectorAll('[data-edit-domain-name]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=> updateDomain(el.getAttribute('data-edit-domain-name'), {name: el.value || 'Untitled domain'}));
   });
-  document.querySelectorAll('[data-open-story-modal]').forEach(el=>{
+  document.querySelectorAll('[data-edit-domain-category]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=> updateDomain(el.getAttribute('data-edit-domain-category'), {category: el.value}));
+  });
+  document.querySelectorAll('[data-edit-domain-notes]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=> updateDomain(el.getAttribute('data-edit-domain-notes'), {notes: el.value}));
+  });
+  document.querySelectorAll('[data-edit-domain-field]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,key]=el.getAttribute('data-edit-domain-field').split('|'); updateDomainField(did,key,el.value); });
+  });
+
+  document.querySelectorAll('[data-group-view]').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); groupViewMode = el.getAttribute('data-group-view'); render(); });
+  });
+  document.querySelectorAll('[data-open-group-modal]').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); openModal({type:'group', did: el.getAttribute('data-open-group-modal')}); });
+  });
+  document.querySelectorAll('[data-open-item-modal]').forEach(el=>{
     el.addEventListener('click', e=>{
       e.stopPropagation();
-      const [pid,eid] = el.getAttribute('data-open-story-modal').split('|');
-      openModal({type:'story', pid, eid});
-    });
-  });
-  document.querySelectorAll('[data-edit-epic-name]').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=>{ const [pid,eid]=el.getAttribute('data-edit-epic-name').split('|'); updateEpic(pid,eid,{name: el.value||'Untitled epic'}); });
-  });
-  document.querySelectorAll('[data-edit-epic-status]').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=>{ const [pid,eid]=el.getAttribute('data-edit-epic-status').split('|'); updateEpic(pid,eid,{status: el.value}); });
-  });
-  document.querySelectorAll('[data-edit-epic-desc]').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=>{ const [pid,eid]=el.getAttribute('data-edit-epic-desc').split('|'); updateEpic(pid,eid,{description: el.value}); });
-  });
-  document.querySelectorAll('[data-delete-epic]').forEach(el=>{
-    el.addEventListener('click', e=>{
-      e.stopPropagation();
-      const [pid,eid] = el.getAttribute('data-delete-epic').split('|');
-      if(confirm('Delete this epic and all its stories?')){ deleteEpic(pid,eid); showToast('epic deleted'); }
+      const [did,gid] = el.getAttribute('data-open-item-modal').split('|');
+      openModal({type:'item', did, gid: gid||null});
     });
   });
 
-  document.querySelectorAll('[data-toggle-story]').forEach(el=>{
+  /* Group */
+  document.querySelectorAll('[data-toggle-group]').forEach(el=>{
     el.addEventListener('click', ()=>{
-      const id = el.getAttribute('data-toggle-story');
-      if(expandedStories.has(id)) expandedStories.delete(id); else expandedStories.add(id);
+      const id = el.getAttribute('data-toggle-group');
+      if(expandedGroups.has(id)) expandedGroups.delete(id); else expandedGroups.add(id);
       render();
     });
   });
-  document.querySelectorAll('[data-edit-story-name]').forEach(el=>{
+  document.querySelectorAll('[data-edit-group-name]').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=>{ const [pid,eid,sid]=el.getAttribute('data-edit-story-name').split('|'); updateStory(pid,eid,sid,{name: el.value||'Untitled story'}); });
+    el.addEventListener('change', ()=>{ const [did,gid]=el.getAttribute('data-edit-group-name').split('|'); updateGroup(did,gid,{name: el.value||'Untitled group'}); });
   });
-  document.querySelectorAll('[data-edit-story-status]').forEach(el=>{
+  document.querySelectorAll('[data-edit-group-notes]').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=>{ const [pid,eid,sid]=el.getAttribute('data-edit-story-status').split('|'); updateStory(pid,eid,sid,{status: el.value}); });
+    el.addEventListener('change', ()=>{ const [did,gid]=el.getAttribute('data-edit-group-notes').split('|'); updateGroup(did,gid,{notes: el.value}); });
   });
-  document.querySelectorAll('[data-edit-story-desc]').forEach(el=>{
+  document.querySelectorAll('[data-edit-group-field]').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=>{ const [pid,eid,sid]=el.getAttribute('data-edit-story-desc').split('|'); updateStory(pid,eid,sid,{description: el.value}); });
+    el.addEventListener('change', ()=>{ const [did,gid,key]=el.getAttribute('data-edit-group-field').split('|'); updateGroupField(did,gid,key,el.value); });
   });
-  document.querySelectorAll('[data-delete-story]').forEach(el=>{
+  document.querySelectorAll('[data-delete-group]').forEach(el=>{
     el.addEventListener('click', e=>{
       e.stopPropagation();
-      const [pid,eid,sid] = el.getAttribute('data-delete-story').split('|');
-      if(confirm('Delete this story and its tasks?')){ deleteStory(pid,eid,sid); showToast('story deleted'); }
+      const [did,gid] = el.getAttribute('data-delete-group').split('|');
+      if(confirm('Delete this group and all its items?')){ deleteGroup(did,gid); showToast('group deleted'); }
     });
   });
-  document.querySelectorAll('[data-add-story-task]').forEach(el=>{
+
+  /* Item */
+  document.querySelectorAll('[data-toggle-item]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const [,,iid] = el.getAttribute('data-toggle-item').split('|');
+      if(expandedItems.has(iid)) expandedItems.delete(iid); else expandedItems.add(iid);
+      render();
+    });
+  });
+  document.querySelectorAll('[data-open-item]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const [did,gid,iid] = el.getAttribute('data-open-item').split('|');
+      groupViewMode = 'tree';
+      expandedId = did;
+      if(gid) expandedGroups.add(gid);
+      expandedItems.add(iid);
+      render();
+    });
+  });
+
+  /* Board drag & drop — only task-kind items are draggable; dropping sets status */
+  document.querySelectorAll('[data-drag-item]').forEach(el=>{
+    el.addEventListener('dragstart', e=>{
+      e.dataTransfer.setData('text/plain', el.getAttribute('data-drag-item'));
+    });
+  });
+  document.querySelectorAll('[data-drop-zone-item]').forEach(zone=>{
+    zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', ()=> zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', e=>{
+      e.preventDefault(); zone.classList.remove('drag-over');
+      const key = e.dataTransfer.getData('text/plain');
+      if(!key) return;
+      const [did,gid,iid] = key.split('|');
+      const [zoneDid, health] = zone.getAttribute('data-drop-zone-item').split('|');
+      if(did !== zoneDid) return;
+      const {item} = locateItem(did, gid, iid);
+      if(!item || item.kind!=='task') return;
+      const status = health==='attention' ? 'blocked' : health==='done' ? 'done' : 'in_progress';
+      updateItem(did, gid, iid, {status});
+      showToast('status updated');
+    });
+  });
+  document.querySelectorAll('[data-edit-item-title]').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ const [pid,eid,sid]=el.getAttribute('data-add-story-task').split('|'); addStoryTask(pid,eid,sid,el.value); el.value=''; } });
+    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-item-title').split('|'); updateItem(did,gid,iid,{title: el.value||'Untitled item'}); });
   });
-  document.querySelectorAll('[data-toggle-story-task]').forEach(el=>{
-    el.addEventListener('click', e=>{ e.stopPropagation(); const [pid,eid,sid,tid]=el.getAttribute('data-toggle-story-task').split('|'); toggleStoryTask(pid,eid,sid,tid); });
+  document.querySelectorAll('[data-edit-item-notes]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-item-notes').split('|'); updateItem(did,gid,iid,{notes: el.value}); });
   });
-  document.querySelectorAll('[data-remove-story-task]').forEach(el=>{
-    el.addEventListener('click', e=>{ e.stopPropagation(); const [pid,eid,sid,tid]=el.getAttribute('data-remove-story-task').split('|'); removeStoryTask(pid,eid,sid,tid); });
+  document.querySelectorAll('[data-edit-item-field]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,gid,iid,key]=el.getAttribute('data-edit-item-field').split('|'); updateItemField(did,gid,iid,key,el.value); });
+  });
+  document.querySelectorAll('[data-edit-item-status]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-item-status').split('|'); updateItem(did,gid,iid,{status: el.value}); });
+  });
+  document.querySelectorAll('[data-delete-item]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const [did,gid,iid] = el.getAttribute('data-delete-item').split('|');
+      if(confirm('Delete this item? This can\'t be undone.')){ deleteItem(did,gid,iid); showToast('item deleted'); }
+    });
+  });
+  document.querySelectorAll('[data-add-checklist]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ const [did,gid,iid]=el.getAttribute('data-add-checklist').split('|'); addChecklistItem(did,gid,iid,el.value); el.value=''; } });
+  });
+  document.querySelectorAll('[data-toggle-checklist]').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); const [did,gid,iid,cid]=el.getAttribute('data-toggle-checklist').split('|'); toggleChecklistItem(did,gid,iid,cid); });
+  });
+  document.querySelectorAll('[data-remove-checklist]').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); const [did,gid,iid,cid]=el.getAttribute('data-remove-checklist').split('|'); removeChecklistItem(did,gid,iid,cid); });
+  });
+
+  /* Recurrence */
+  document.querySelectorAll('[data-set-recur-type]').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); const [did,gid,iid,type]=el.getAttribute('data-set-recur-type').split('|'); setItemRecurrenceType(did,gid,iid,type); });
+  });
+  document.querySelectorAll('[data-edit-recur-every]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-recur-every').split('|'); updateItemRecurrence(did,gid,iid,{every: Number(el.value)||1}); });
+  });
+  document.querySelectorAll('[data-edit-recur-unit]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-recur-unit').split('|'); updateItemRecurrence(did,gid,iid,{unit: el.value}); });
+  });
+  document.querySelectorAll('[data-edit-recur-month]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-recur-month').split('|'); updateItemRecurrence(did,gid,iid,{month: Number(el.value)||1}); });
+  });
+  document.querySelectorAll('[data-edit-recur-day]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-recur-day').split('|'); updateItemRecurrence(did,gid,iid,{day: Number(el.value)||1}); });
+  });
+  document.querySelectorAll('[data-edit-recur-date]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-recur-date').split('|'); updateItemRecurrence(did,gid,iid,{date: el.value}); });
+  });
+  document.querySelectorAll('[data-edit-lead-days]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-lead-days').split('|'); updateItem(did,gid,iid,{reminderLeadDays: Number(el.value)||0}); });
+  });
+  document.querySelectorAll('[data-add-log]').forEach(el=>{
+    el.addEventListener('click', e=>{
+      e.stopPropagation();
+      const [did,gid,iid] = el.getAttribute('data-add-log').split('|');
+      const dateEl = document.getElementById('logDate-'+iid);
+      const noteEl = document.getElementById('logNote-'+iid);
+      const costEl = document.getElementById('logCost-'+iid);
+      const mileageEl = document.getElementById('logMileage-'+iid);
+      addLogEntry(did,gid,iid, {
+        date: dateEl ? dateEl.value : '',
+        note: noteEl ? noteEl.value : '',
+        cost: costEl ? costEl.value : '',
+        mileage: mileageEl ? mileageEl.value : ''
+      });
+      showToast('logged');
+    });
+  });
+  document.querySelectorAll('[data-remove-log]').forEach(el=>{
+    el.addEventListener('click', e=>{ e.stopPropagation(); const [did,gid,iid,lid]=el.getAttribute('data-remove-log').split('|'); removeLogEntry(did,gid,iid,lid); });
   });
 
   document.querySelectorAll('.detail, .node-detail').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
   });
-
-  /* ---- Drag & drop for boards ---- */
-  document.querySelectorAll('[data-drag-project]').forEach(el=>{
-    el.addEventListener('dragstart', e=>{
-      e.dataTransfer.setData('text/plain', JSON.stringify({type:'project', id: el.getAttribute('data-drag-project')}));
-    });
-    el.addEventListener('click', ()=>{
-      const id = el.getAttribute('data-drag-project');
-      globalView = 'list';
-      document.querySelectorAll('[data-global-view]').forEach(b=>b.classList.toggle('active', b.getAttribute('data-global-view')==='list'));
-      storyViewMode = 'tree';
-      expandedId = id;
-      render();
-    });
-  });
-  document.querySelectorAll('[data-drag-story]').forEach(el=>{
-    el.addEventListener('dragstart', e=>{
-      e.dataTransfer.setData('text/plain', JSON.stringify({type:'story', key: el.getAttribute('data-drag-story')}));
-    });
-    el.addEventListener('click', ()=>{
-      const [pid,eid,sid] = el.getAttribute('data-drag-story').split('|');
-      storyViewMode = 'tree';
-      expandedEpics.add(eid);
-      expandedStories.add(sid);
-      render();
-    });
-  });
-  document.querySelectorAll('[data-drop-zone]').forEach(zone=>{
-    zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.classList.add('drag-over'); });
-    zone.addEventListener('dragleave', ()=> zone.classList.remove('drag-over'));
-    zone.addEventListener('drop', e=>{
-      e.preventDefault(); zone.classList.remove('drag-over');
-      let data = {};
-      try{ data = JSON.parse(e.dataTransfer.getData('text/plain')||'{}'); }catch(err){}
-      const newStatus = zone.getAttribute('data-drop-zone');
-      if(data.type==='project'){ updateProject(data.id, {status:newStatus}); showToast('status updated'); }
-    });
-  });
-  document.querySelectorAll('[data-drop-zone-story]').forEach(zone=>{
-    zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.classList.add('drag-over'); });
-    zone.addEventListener('dragleave', ()=> zone.classList.remove('drag-over'));
-    zone.addEventListener('drop', e=>{
-      e.preventDefault(); zone.classList.remove('drag-over');
-      let data = {};
-      try{ data = JSON.parse(e.dataTransfer.getData('text/plain')||'{}'); }catch(err){}
-      const [, newStatus] = zone.getAttribute('data-drop-zone-story').split('|');
-      if(data.type==='story'){
-        const [dpid,eid,sid] = data.key.split('|');
-        updateStory(dpid, eid, sid, {status:newStatus});
-        showToast('status updated');
-      }
-    });
-  });
 }
 
-document.getElementById('newBtn').addEventListener('click', createProject);
-document.querySelectorAll('.tab').forEach(tab=>{
+document.getElementById('newBtn').addEventListener('click', ()=> openModal({type:'domain'}));
+document.querySelectorAll('#healthTabs .tab').forEach(tab=>{
   tab.addEventListener('click', ()=>{
-    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('#healthTabs .tab').forEach(t=>t.classList.remove('active'));
     tab.classList.add('active');
-    currentFilter = tab.getAttribute('data-filter');
+    currentHealthFilter = tab.getAttribute('data-filter');
     render();
   });
 });
@@ -912,11 +1264,11 @@ if('serviceWorker' in navigator && location.protocol !== 'file:'){
 
 /* ---- Boot ---- */
 loadTheme();
-loadProjects().then(()=>{
+loadDomains().then(()=>{
   /* manifest shortcut: ./?action=new */
   const params = new URLSearchParams(location.search);
   if(params.get('action') === 'new'){
-    createProject();
+    openModal({type:'domain'});
     history.replaceState(null, '', location.pathname);
   }
   if(!Store.persistent) showToast('storage blocked — changes won\'t be saved');
