@@ -29,20 +29,42 @@ let domains = [];
 let currentHealthFilter = 'all';   // all | attention | on_track | done
 let currentCatFilter = 'all';      // all | software | home | ...
 let globalView = 'list';           // 'list' | 'board'
-let groupViewMode = 'tree';        // 'tree' | 'board' (for whichever domain is expanded)
-let expandedId = null;
-let expandedGroups = new Set();
+let groupViewMode = 'tree';        // 'tree' | 'board' (for whichever domain page is open)
 let expandedItems = new Set();
 let searchTerm = '';
 let editingField = null;           // fieldKey of the single field currently in edit mode (text input, chip picker, or popover), or null
 let extraFieldsExpanded = new Set(); // pathKeys whose category-specific extra fields are expanded from summary into individual fields
 let logDetailsOpen = new Set();    // item ids whose "add details" (note/cost/mileage) panel is expanded for the next log entry
+let domainPageHealthFilter = 'all'; // 'all'|'attention'|'on_track'|'done' — scoped to whichever domain page is open
+let domainPageGroupFilter = 'all';  // 'all'|groupId — scoped to whichever domain page is open
+let tasksDatePreset = 'all';       // 'all'|'today'|'tomorrow'|'week'|'month'|'custom'
+let tasksCustomFrom = null;
+let tasksCustomTo = null;
+let tasksCatFilter = 'all';        // 'all'|category key, scoped to the Tasks board
 
 const grid = document.getElementById('grid');
 const ledgerStrip = document.getElementById('ledgerStrip');
 const catChips = document.getElementById('catChips');
 const toastEl = document.getElementById('toast');
 const healthTabsEl = document.getElementById('healthTabs');
+const domainsWidgetsEl = document.getElementById('domainsWidgets');
+
+/* ---- Hash routing ----
+   #/domain/<id> -> domain detail page, #/tasks -> global tasks board, anything else -> domains list/board. */
+function currentRoute(){
+  const h = location.hash || '';
+  const m = h.match(/^#\/domain\/(.+)$/);
+  if(m) return {view:'domain', id: decodeURIComponent(m[1])};
+  if(h === '#/tasks') return {view:'tasks'};
+  return {view:'domains'};
+}
+function openDomainPage(id){
+  domainPageHealthFilter = 'all';
+  domainPageGroupFilter = 'all';
+  groupViewMode = 'tree';
+  location.hash = '#/domain/' + encodeURIComponent(id);
+}
+window.addEventListener('hashchange', render);
 
 function showToast(msg){
   toastEl.textContent = msg;
@@ -325,9 +347,8 @@ function createDomain(name, category, notes){
   domains.unshift(d);
   globalView = 'list';
   document.querySelectorAll('[data-global-view]').forEach(b=>b.classList.toggle('active', b.getAttribute('data-global-view')==='list'));
-  expandedId = d.id;
-  groupViewMode = 'tree';
-  persist(); render();
+  persist();
+  openDomainPage(d.id);
 }
 function updateDomain(id, patch){
   const d = findDomain(id);
@@ -345,7 +366,8 @@ function updateDomainField(id, key, value){
 }
 function deleteDomain(id){
   domains = domains.filter(x=>x.id!==id);
-  if(expandedId===id) expandedId = null;
+  const route = currentRoute();
+  if(route.view==='domain' && route.id===id){ location.hash = ''; }
   persist(); render();
 }
 
@@ -358,7 +380,6 @@ function addGroup(did, name, notes){
   const g = {id: uid('g'), code: nextGroupCode(d), name: name.trim(), notes: notes||'', fields:{}, items:[]};
   d.groups.push(g);
   d.updatedAt = new Date().toISOString();
-  expandedGroups.add(g.id);
   persist(); render();
 }
 function updateGroup(did, gid, patch){
@@ -382,7 +403,6 @@ function deleteGroup(did, gid){
   const d = findDomain(did);
   if(!d) return;
   d.groups = (d.groups||[]).filter(x=>x.id!==gid);
-  expandedGroups.delete(gid);
   d.updatedAt = new Date().toISOString();
   persist(); render();
 }
@@ -402,6 +422,7 @@ function addItem(did, gid, kind, title, status, notes){
   if(item.kind==='task'){
     item.status = status||'not_started';
     item.checklist = [];
+    item.dueDate = null;
   } else {
     item.recurrence = {type:'interval', every:3, unit:'months'};
     item.reminderLeadDays = 14;
@@ -765,12 +786,30 @@ function renderExtraFields(configFields, values, dataAttr, pathKey){
 
 /* ---- Main render ---- */
 function render(){
+  const route = currentRoute();
   renderLedgerStrip();
   renderCatChips();
   populateQuickAdd();
-  healthTabsEl.classList.toggle('disabled', globalView==='board');
+  document.querySelectorAll('[data-top-view]').forEach(b=>{
+    b.classList.toggle('on', b.getAttribute('data-top-view') === (route.view==='tasks' ? 'tasks' : 'domains'));
+  });
+  if(domainsWidgetsEl) domainsWidgetsEl.style.display = route.view==='domains' ? '' : 'none';
+  healthTabsEl.classList.toggle('disabled', route.view!=='domains' || globalView==='board');
 
-  if(globalView==='board'){
+  if(route.view==='tasks'){
+    /* Both the domain page and tasks board are single-column flowing pages, not the
+       2-column card grid — reuse .board-mode's display:block for that, same as the
+       domains board sub-view. */
+    grid.classList.add('board-mode');
+    grid.innerHTML = renderTasksBoard();
+  } else if(route.view==='domain'){
+    const d = findDomain(route.id);
+    grid.classList.add('board-mode');
+    grid.innerHTML = d ? renderDomainPage(d) : `<div class="empty-state">
+      <div class="em-title">Domain not found</div>
+      <div>It may have been deleted. <button class="back-link" data-open-domains-list style="display:inline;">&larr; All domains</button></div>
+    </div>`;
+  } else if(globalView==='board'){
     grid.classList.add('board-mode');
     grid.innerHTML = renderGlobalBoard();
   } else {
@@ -784,34 +823,41 @@ function render(){
       attachHandlers();
       return;
     }
-    grid.innerHTML = visible.map(d=>{
-      const health = domainHealth(d);
-      const isOpen = expandedId===d.id;
-      const cat = catOf(d);
-      return `
-        <div class="card">
-          <div class="status-stripe ${health}"></div>
-          <div class="card-body" data-toggle-domain="${d.id}">
-            <div class="card-top">
-              <div class="card-titles">
-                <div class="card-code">${d.code}</div>
-                <div class="card-name">${escapeHtml(d.name)}</div>
-              </div>
-              ${healthBadge(health)}
-            </div>
-            <div class="card-cat"><span class="chip-dot ${cat.color}"></span>${cat.label}</div>
-            ${d.notes ? `<div class="card-desc">${escapeHtml(d.notes)}</div>` : ''}
-            <div class="card-meta">
-              <div class="task-count">${domainSummaryText(d)}</div>
-              <div class="updated">${timeAgo(d.updatedAt)}</div>
-            </div>
-          </div>
-          ${isOpen ? renderDomainDetail(d) : ''}
-        </div>
-      `;
-    }).join('');
+    grid.innerHTML = visible.map(renderDomainCard).join('');
   }
   attachHandlers();
+}
+function renderDomainCard(d){
+  const health = domainHealth(d);
+  const cat = catOf(d);
+  const counts = domainCounts(d);
+  const groups = (d.groups||[]).length;
+  const items = allItemsOf(d).length;
+  return `
+    <div class="card" data-open-domain-page="${d.id}">
+      <div class="status-stripe ${health}"></div>
+      <div class="card-body">
+        <div class="card-top">
+          <div class="card-titles">
+            <div class="card-code">${d.code}</div>
+            <div class="card-name">${escapeHtml(d.name)}</div>
+            <div class="card-cat"><span class="chip-dot ${cat.color}"></span>${cat.label}</div>
+          </div>
+          ${healthBadge(health)}
+        </div>
+        ${d.notes ? `<div class="card-desc">${escapeHtml(d.notes)}</div>` : ''}
+        <div class="dcard-counts">
+          <div class="dcount attention"><span class="dcount-num">${counts.attention}</span><span class="dcount-label">Attn</span></div>
+          <div class="dcount on_track"><span class="dcount-num">${counts.on_track}</span><span class="dcount-label">Track</span></div>
+          <div class="dcount done"><span class="dcount-num">${counts.done}</span><span class="dcount-label">Done</span></div>
+        </div>
+        <div class="card-meta">
+          <div class="task-count">${groups} group${groups!==1?'s':''} &middot; ${items} item${items!==1?'s':''}</div>
+          <div class="updated">${timeAgo(d.updatedAt)}</div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 const HEALTH_ORDER = ['attention','on_track','done'];
@@ -833,7 +879,7 @@ function renderGlobalBoard(){
 }
 function renderBoardDomainCard(d){
   const cat = catOf(d);
-  return `<div class="board-card" data-open-domain="${d.id}">
+  return `<div class="board-card" data-open-domain-page="${d.id}">
     <div class="board-card-code">${d.code}</div>
     <div class="board-card-name">${escapeHtml(d.name)}</div>
     <div class="board-card-sub"><span class="chip-dot ${cat.color}"></span>${cat.label} · ${domainSummaryText(d)}</div>
@@ -846,17 +892,45 @@ function renderCategoryChipGrid(fieldKey, selected, dataAttr, pathKey){
     return `<button type="button" class="chip ${selected===k?'active':''}" data-${dataAttr}="${pathKey!=null?pathKey+'|':''}${k}"><span class="chip-dot ${c.color}"></span>${c.label}</button>`;
   }).join('')}</div>`;
 }
-function renderDomainDetail(d){
+function renderDomainPage(d){
   const cat = catOf(d);
-  const hasGroups = (d.groups||[]).length > 0;
-  const ungroupedItems = d.items||[];
+  const health = domainHealth(d);
   const nameFieldKey = 'dn|'+d.id, notesFieldKey = 'dno|'+d.id, catFieldKey = 'dc|'+d.id;
+  const groups = d.groups||[];
+
+  const healthFilters = [['all','All'],['attention','Attention'],['on_track','On track'],['done','Done']];
+  const itemPasses = it => domainPageHealthFilter==='all' || itemHealth(it)===domainPageHealthFilter;
+  const showUngrouped = domainPageGroupFilter==='all';
+  const visibleGroups = groups.filter(g=> domainPageGroupFilter==='all' || domainPageGroupFilter===g.id);
+  const ungroupedItems = showUngrouped ? (d.items||[]).filter(itemPasses) : [];
+
+  let bodyHtml;
+  if(groupViewMode==='board'){
+    bodyHtml = renderItemsBoard(d);
+  } else {
+    const sections = [];
+    if(ungroupedItems.length || (showUngrouped && groups.length===0)){
+      sections.push(renderItemsCardSection(d, ungroupedItems));
+    }
+    visibleGroups.forEach(g=>{
+      sections.push(renderGroupSection(d, g, (g.items||[]).filter(itemPasses)));
+    });
+    bodyHtml = sections.length ? sections.join('') : `<div class="empty-hint">Nothing matches this filter.</div>`;
+  }
+
   return `
-    <div class="detail">
-      ${renderField(nameFieldKey, 'Name',
-        textFieldHtml(d.name),
-        `<input type="text" value="${escapeAttr(d.name)}" data-edit-domain-name="${d.id}" data-field-input="${nameFieldKey}" data-name-input="${d.id}">`
-      )}
+    <button class="back-link" data-open-domains-list>&larr; All domains</button>
+    <div class="dhead">
+      <div class="dhead-top">
+        <div class="card-titles">
+          <div class="dhead-code">${d.code}</div>
+          <div class="dhead-name">${renderField(nameFieldKey, 'Name',
+            textFieldHtml(d.name),
+            `<input type="text" value="${escapeAttr(d.name)}" data-edit-domain-name="${d.id}" data-field-input="${nameFieldKey}">`
+          )}</div>
+        </div>
+        ${healthBadge(health)}
+      </div>
       ${renderField(catFieldKey, 'Category',
         `<span class="field-text"><span class="chip-dot ${cat.color}"></span>${cat.label}</span>`,
         renderCategoryChipGrid(catFieldKey, d.category, 'set-domain-category', d.id)
@@ -866,32 +940,90 @@ function renderDomainDetail(d){
         `<textarea data-edit-domain-notes="${d.id}" data-field-input="${notesFieldKey}" placeholder="What is this domain, and where does it stand?">${escapeHtml(d.notes||'')}</textarea>`
       )}
       ${renderExtraFields(cat.domainFields, d.fields, 'edit-domain-field', d.id)}
+    </div>
 
-      <div class="subsection">
-        <div class="subsection-head">
-          <span class="field-label">Groups &amp; items</span>
-          <div class="seg-toggle mini">
-            <button class="seg-opt ${groupViewMode==='tree'?'active':''}" data-group-view="tree">tree</button>
-            <button class="seg-opt ${groupViewMode==='board'?'active':''}" data-group-view="board">board</button>
-          </div>
-        </div>
-        ${groupViewMode==='board' ? renderItemsBoard(d) : `
-          <div class="node-list">
-            ${ungroupedItems.length ? ungroupedItems.map(it=>renderItemNode(d,null,it)).join('') : ''}
-            ${hasGroups ? (d.groups||[]).map(g=>renderGroupNode(d,g)).join('') : ''}
-            ${(!ungroupedItems.length && !hasGroups) ? `<div class="empty-hint">No ${cat.itemNoun.toLowerCase()}s yet.</div>` : ''}
-          </div>
-          <button class="add-node-btn" data-open-item-modal="${d.id}|">+ Add ${cat.itemNoun.toLowerCase()}</button>
-          <button class="add-node-btn" data-open-group-modal="${d.id}">+ Add ${cat.groupNoun.toLowerCase()}</button>
-        `}
+    <div class="dfilters">
+      <div class="dfilter-group">
+        <span class="dfilter-label">Status</span>
+        <div class="dfilter-chips">${healthFilters.map(([k,l])=>`<button class="chip ${domainPageHealthFilter===k?'active':''}" data-domain-health-filter="${k}">${l}</button>`).join('')}</div>
       </div>
-
-      <div class="detail-footer">
-        <button class="delete-btn" data-delete-domain="${d.id}">delete domain</button>
-        <button class="close-btn" data-collapse-domain="${d.id}">Done editing</button>
+      ${groups.length ? `<div class="dfilter-group">
+        <span class="dfilter-label">${cat.groupNoun}</span>
+        <div class="dfilter-chips">
+          <button class="chip ${domainPageGroupFilter==='all'?'active':''}" data-domain-group-filter="all">All</button>
+          ${groups.map(g=>`<button class="chip ${domainPageGroupFilter===g.id?'active':''}" data-domain-group-filter="${g.id}">${escapeHtml(g.name)}</button>`).join('')}
+        </div>
+      </div>` : ''}
+      <div class="dfilter-group">
+        <span class="dfilter-label">View</span>
+        <div class="seg-toggle mini">
+          <button class="seg-opt ${groupViewMode==='tree'?'active':''}" data-group-view="tree">cards</button>
+          <button class="seg-opt ${groupViewMode==='board'?'active':''}" data-group-view="board">board</button>
+        </div>
       </div>
     </div>
+
+    <div class="dactions">
+      <button class="ghost-btn" data-open-item-modal="${d.id}|">+ Add ${cat.itemNoun.toLowerCase()}</button>
+      <button class="ghost-btn" data-open-group-modal="${d.id}">+ Add ${cat.groupNoun.toLowerCase()}</button>
+    </div>
+
+    ${bodyHtml}
+
+    <div class="detail-footer">
+      <button class="delete-btn" data-delete-domain="${d.id}">delete domain</button>
+    </div>
   `;
+}
+function renderIcard(d, g, it){
+  const gid = g ? g.id : '';
+  const isOpen = expandedItems.has(it.id);
+  if(isOpen){
+    return `<div class="icard icard-open" style="grid-column:1/-1;">
+      <div class="icard-top" data-toggle-item="${d.id}|${gid}|${it.id}">
+        <div><div class="icard-code">${it.code}</div><div class="icard-name">${escapeHtml(it.title)}</div></div>
+        <span class="node-caret open">&rsaquo;</span>
+      </div>
+      ${renderItemDetail(d,g,it)}
+    </div>`;
+  }
+  const rightBit = it.kind==='task' ? `<span class="badge ${it.status}">${STATUS_LABEL[it.status]}</span>` : dueBadge(it);
+  const sub = it.kind==='task' ? `${checklistProgress(it)}% checklist complete` : describeRecurrence(it);
+  return `<div class="icard" data-toggle-item="${d.id}|${gid}|${it.id}">
+    <div class="icard-top">
+      <div><div class="icard-code">${it.code}</div><div class="icard-name">${escapeHtml(it.title)}</div></div>
+      ${rightBit}
+    </div>
+    <div class="icard-sub">${sub}</div>
+  </div>`;
+}
+function renderItemsCardSection(d, items){
+  const cat = catOf(d);
+  return `<div class="group-section">
+    <div class="icards">
+      ${items.map(it=>renderIcard(d,null,it)).join('')}
+      <button class="add-icard" data-open-item-modal="${d.id}|">+ Add ${cat.itemNoun.toLowerCase()}</button>
+    </div>
+  </div>`;
+}
+function renderGroupSection(d, g, items){
+  const cat = catOf(d);
+  return `<div class="group-section">
+    <div class="group-head">
+      ${renderField('gn|'+d.id+'|'+g.id, 'Name', textFieldHtml(g.name), `<input type="text" value="${escapeAttr(g.name)}" data-edit-group-name="${d.id}|${g.id}" data-field-input="gn|${d.id}|${g.id}">`)}
+    </div>
+    ${renderField('gno|'+d.id+'|'+g.id, 'Notes', textFieldHtml(g.notes, `What does this ${cat.groupNoun.toLowerCase()} cover?`), `<textarea data-edit-group-notes="${d.id}|${g.id}" data-field-input="gno|${d.id}|${g.id}" placeholder="What does this ${cat.groupNoun.toLowerCase()} cover?">${escapeHtml(g.notes||'')}</textarea>`)}
+    ${renderExtraFields(cat.groupFields, g.fields, 'edit-group-field', d.id+'|'+g.id)}
+    <div class="group-meta-row">
+      <span class="group-meta">${(g.items||[]).length} ${cat.itemNoun.toLowerCase()}${(g.items||[]).length!==1?'s':''}</span>
+      <button class="group-add-btn" data-open-item-modal="${d.id}|${g.id}">+ add ${cat.itemNoun.toLowerCase()}</button>
+      <button class="delete-btn" data-delete-group="${d.id}|${g.id}">delete ${cat.groupNoun.toLowerCase()}</button>
+    </div>
+    <div class="icards">
+      ${items.map(it=>renderIcard(d,g,it)).join('')}
+      <button class="add-icard" data-open-item-modal="${d.id}|${g.id}">+ Add ${cat.itemNoun.toLowerCase()}</button>
+    </div>
+  </div>`;
 }
 
 function renderItemsBoard(d){
@@ -920,64 +1052,90 @@ function renderBoardItemCard(d, it){
   </div>`;
 }
 
-function renderGroupNode(d, g){
-  const isOpen = expandedGroups.has(g.id);
-  const health = groupHealth(g);
-  const cat = catOf(d);
-  const itemsHtml = (g.items||[]).length
-    ? (g.items||[]).map(it=>renderItemNode(d,g,it)).join('')
-    : `<div class="empty-hint">No ${cat.itemNoun.toLowerCase()}s yet.</div>`;
-  return `
-    <div class="node epic-node">
-      <div class="node-stripe ${health}"></div>
-      <div class="node-row" data-toggle-group="${g.id}">
-        <span class="node-caret ${isOpen?'open':''}">&rsaquo;</span>
-        <span class="node-code">${g.code}</span>
-        <span class="node-name">${escapeHtml(g.name)}</span>
-        ${healthNodeBadge(health)}
-      </div>
-      ${isOpen ? `
-        <div class="node-detail">
-          ${renderField('gn|'+d.id+'|'+g.id, 'Name',
-            textFieldHtml(g.name),
-            `<input type="text" value="${escapeAttr(g.name)}" data-edit-group-name="${d.id}|${g.id}" data-field-input="gn|${d.id}|${g.id}">`
-          )}
-          ${renderField('gno|'+d.id+'|'+g.id, 'Notes',
-            textFieldHtml(g.notes, `What does this ${cat.groupNoun.toLowerCase()} cover?`),
-            `<textarea data-edit-group-notes="${d.id}|${g.id}" data-field-input="gno|${d.id}|${g.id}" placeholder="What does this ${cat.groupNoun.toLowerCase()} cover?">${escapeHtml(g.notes||'')}</textarea>`
-          )}
-          ${renderExtraFields(cat.groupFields, g.fields, 'edit-group-field', d.id+'|'+g.id)}
-          <div class="subsection">
-            <span class="field-label">${cat.itemNoun}s</span>
-            <div class="node-list">${itemsHtml}</div>
-            <button class="add-node-btn" data-open-item-modal="${d.id}|${g.id}">+ Add ${cat.itemNoun.toLowerCase()}</button>
-          </div>
-          <div class="node-footer"><button class="delete-btn" data-delete-group="${d.id}|${g.id}">delete ${cat.groupNoun.toLowerCase()}</button></div>
-        </div>
-      ` : ''}
-    </div>
-  `;
+/* ---- Global tasks board (kind:'task' items across every domain) ---- */
+function allTaskItemsFlat(){
+  const out = [];
+  domains.forEach(d=>{
+    (d.items||[]).forEach(it=>{ if(it.kind==='task') out.push({d, g:null, it}); });
+    (d.groups||[]).forEach(g=>{
+      (g.items||[]).forEach(it=>{ if(it.kind==='task') out.push({d, g, it}); });
+    });
+  });
+  return out;
 }
-
-function renderItemNode(d, g, it){
-  const isOpen = expandedItems.has(it.id);
-  const gid = g ? g.id : '';
-  const health = itemHealth(it);
-  const cat = catOf(d);
-  const rightBit = it.kind==='task' ? `<span class="node-pct">${checklistProgress(it)}%</span>` : dueBadge(it);
-  return `
-    <div class="node story-node">
-      <div class="node-stripe ${health}"></div>
-      <div class="node-row" data-toggle-item="${d.id}|${gid}|${it.id}">
-        <span class="node-caret ${isOpen?'open':''}">&rsaquo;</span>
-        <span class="node-code">${it.code}</span>
-        <span class="node-name">${escapeHtml(it.title)}</span>
-        ${it.kind==='task' ? `<span class="node-badge ${it.status}">${STATUS_LABEL[it.status]}</span>` : ''}
-        ${rightBit}
-      </div>
-      ${isOpen ? renderItemDetail(d,g,it) : ''}
+function matchesTaskDateFilter(it){
+  if(tasksDatePreset==='all') return true;
+  if(!it.dueDate) return false;
+  const due = startOfDay(it.dueDate);
+  const today = startOfDay(new Date());
+  if(tasksDatePreset==='today') return due.getTime()===today.getTime();
+  if(tasksDatePreset==='tomorrow') return due.getTime()===startOfDay(addUnits(today,1,'days')).getTime();
+  if(tasksDatePreset==='week'){ const end = startOfDay(addUnits(today,6,'days')); return due>=today && due<=end; }
+  if(tasksDatePreset==='month') return due.getFullYear()===today.getFullYear() && due.getMonth()===today.getMonth();
+  if(tasksDatePreset==='custom'){
+    if(tasksCustomFrom && due < startOfDay(tasksCustomFrom)) return false;
+    if(tasksCustomTo && due > startOfDay(tasksCustomTo)) return false;
+    return true;
+  }
+  return true;
+}
+function taskDueMeta(it){
+  if(!it.dueDate) return {label:'No due date', chipClass:'unknown'};
+  const due = startOfDay(it.dueDate);
+  const today = startOfDay(new Date());
+  const days = Math.round((due-today)/DAY_MS);
+  const label = days===0 ? 'Today' : days===1 ? 'Tomorrow' : due.toLocaleDateString(undefined,{month:'short',day:'numeric'});
+  const chipClass = days<0 ? 'overdue' : days<=1 ? 'due_soon' : 'upcoming';
+  return {label, chipClass};
+}
+function renderTaskCard(d, g, it){
+  const due = taskDueMeta(it);
+  const context = g ? `${escapeHtml(d.name)} &middot; ${escapeHtml(g.name)}` : escapeHtml(d.name);
+  return `<div class="board-card" draggable="true" data-drag-task="${d.id}|${g?g.id:''}|${it.id}">
+    <div class="board-card-name">${escapeHtml(it.title)}</div>
+    <div class="board-card-sub">${context}</div>
+    <div class="board-card-sub"><span class="due-chip ${due.chipClass}">${due.label}</span></div>
+  </div>`;
+}
+const DATE_PRESET_LABEL = [['all','All'],['today','Today'],['tomorrow','Tomorrow'],['week','This week'],['month','This month'],['custom','Custom range&hellip;']];
+function renderTasksBoard(){
+  const matches = allTaskItemsFlat().filter(x=> (tasksCatFilter==='all'||x.d.category===tasksCatFilter) && matchesTaskDateFilter(x.it));
+  const domainCount = new Set(domains.map(d=>d.id)).size;
+  let html = `
+    <div class="tb-head">
+      <div><h2 class="tb-title">Tasks</h2><div class="tb-sub">${matches.length} task${matches.length!==1?'s':''} ${tasksDatePreset==='all'&&tasksCatFilter==='all'?`across ${domainCount} domain${domainCount!==1?'s':''}`:'matching your filters'}</div></div>
+    </div>
+    <div class="chip-row">
+      ${DATE_PRESET_LABEL.map(([k,l])=>`<button class="chip ${tasksDatePreset===k?'active':''}" data-task-date-preset="${k}">${l}</button>`).join('')}
+    </div>
+    <div class="date-range ${tasksDatePreset==='custom'?'open':''}">
+      <span>From</span><input type="date" value="${tasksCustomFrom||''}" data-task-range-from>
+      <span>To</span><input type="date" value="${tasksCustomTo||''}" data-task-range-to>
+    </div>
+    <div class="chip-row">
+      <button class="chip ${tasksCatFilter==='all'?'active':''}" data-task-cat-filter="all">All domains</button>
+      ${CATEGORY_ORDER.map(k=>{ const c=CATEGORIES[k]; return `<button class="chip ${tasksCatFilter===k?'active':''}" data-task-cat-filter="${k}"><span class="chip-dot ${c.color}"></span>${c.label}</button>`; }).join('')}
     </div>
   `;
+  if(!matches.length){
+    html += `<div class="empty-state">
+      <div class="em-title">No tasks match</div>
+      <div>Try a different date range or domain filter, or add a one-off task from a domain page.</div>
+    </div>`;
+    return html;
+  }
+  html += '<div class="board">';
+  STATUS_ORDER.forEach(status=>{
+    const inCol = matches.filter(x=>x.it.status===status);
+    html += `<div class="board-col">
+      <div class="board-col-head"><span class="board-col-dot ${status}"></span>${STATUS_LABEL[status]}<span class="board-col-count">${inCol.length}</span></div>
+      <div class="board-col-body" data-drop-zone-task="${status}">
+        ${inCol.length ? inCol.map(x=>renderTaskCard(x.d,x.g,x.it)).join('') : '<div class="empty-hint">nothing here</div>'}
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  return html;
 }
 
 function renderRecurPopover(key, it){
@@ -1050,6 +1208,10 @@ function renderItemDetail(d, g, it){
         `<span class="badge ${it.status}">${STATUS_LABEL[it.status]}</span>`,
         `<div class="status-chip-row">${STATUS_ORDER.map(s=>`<button type="button" class="chip status-chip ${s} ${it.status===s?'active':''}" data-set-item-status="${key}|${s}">${STATUS_LABEL[s]}</button>`).join('')}</div>`
       )}
+      ${renderField('idue|'+key, 'Due date',
+        it.dueDate ? `<span class="field-text">${it.dueDate}</span>` : `<span class="field-text field-empty">No due date</span>`,
+        `<input type="date" value="${it.dueDate||''}" data-edit-item-due="${key}" data-field-input="idue|${key}">`
+      )}
       <div class="field">
         <span class="field-label">Checklist</span>
         <div class="tasks-list">${checklistHtml}</div>
@@ -1111,17 +1273,20 @@ function renderItemDetail(d, g, it){
 
 function attachHandlers(){
   /* Domain */
-  document.querySelectorAll('[data-toggle-domain]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      const id = el.getAttribute('data-toggle-domain');
-      if(expandedId !== id){ groupViewMode = 'tree'; }
-      expandedId = expandedId===id ? null : id;
-      editingField = null;
-      render();
-    });
+  document.querySelectorAll('[data-open-domain-page]').forEach(el=>{
+    el.addEventListener('click', ()=>{ openDomainPage(el.getAttribute('data-open-domain-page')); });
   });
-  document.querySelectorAll('[data-collapse-domain]').forEach(el=>{
-    el.addEventListener('click', e=>{ e.stopPropagation(); expandedId = null; render(); });
+  document.querySelectorAll('[data-open-domains-list]').forEach(el=>{
+    el.addEventListener('click', ()=>{ location.hash = ''; });
+  });
+  document.querySelectorAll('[data-top-view]').forEach(el=>{
+    el.addEventListener('click', ()=>{ location.hash = el.getAttribute('data-top-view')==='tasks' ? '#/tasks' : ''; });
+  });
+  document.querySelectorAll('[data-domain-health-filter]').forEach(el=>{
+    el.addEventListener('click', ()=>{ domainPageHealthFilter = el.getAttribute('data-domain-health-filter'); render(); });
+  });
+  document.querySelectorAll('[data-domain-group-filter]').forEach(el=>{
+    el.addEventListener('click', ()=>{ domainPageGroupFilter = el.getAttribute('data-domain-group-filter'); render(); });
   });
   document.querySelectorAll('[data-delete-domain]').forEach(el=>{
     el.addEventListener('click', e=>{
@@ -1131,16 +1296,6 @@ function attachHandlers(){
       if(confirm(`Delete "${d?d.name:'this domain'}"? This can't be undone.`)){
         deleteDomain(id); showToast('domain deleted');
       }
-    });
-  });
-  document.querySelectorAll('[data-open-domain]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      const id = el.getAttribute('data-open-domain');
-      globalView = 'list';
-      document.querySelectorAll('[data-global-view]').forEach(b=>b.classList.toggle('active', b.getAttribute('data-global-view')==='list'));
-      groupViewMode = 'tree';
-      expandedId = id;
-      render();
     });
   });
   document.querySelectorAll('[data-edit-domain-name]').forEach(el=>{
@@ -1179,14 +1334,6 @@ function attachHandlers(){
   });
 
   /* Group */
-  document.querySelectorAll('[data-toggle-group]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      const id = el.getAttribute('data-toggle-group');
-      if(expandedGroups.has(id)) expandedGroups.delete(id); else expandedGroups.add(id);
-      editingField = null;
-      render();
-    });
-  });
   document.querySelectorAll('[data-edit-group-name]').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
     el.addEventListener('change', ()=>{ const [did,gid]=el.getAttribute('data-edit-group-name').split('|'); updateGroup(did,gid,{name: el.value||'Untitled group'}); });
@@ -1218,10 +1365,8 @@ function attachHandlers(){
   });
   document.querySelectorAll('[data-open-item]').forEach(el=>{
     el.addEventListener('click', ()=>{
-      const [did,gid,iid] = el.getAttribute('data-open-item').split('|');
+      const [,,iid] = el.getAttribute('data-open-item').split('|');
       groupViewMode = 'tree';
-      expandedId = did;
-      if(gid) expandedGroups.add(gid);
       expandedItems.add(iid);
       render();
     });
@@ -1250,6 +1395,39 @@ function attachHandlers(){
       showToast('status updated');
     });
   });
+
+  /* Global tasks board */
+  document.querySelectorAll('[data-task-date-preset]').forEach(el=>{
+    el.addEventListener('click', ()=>{ tasksDatePreset = el.getAttribute('data-task-date-preset'); render(); });
+  });
+  document.querySelectorAll('[data-task-range-from]').forEach(el=>{
+    el.addEventListener('change', ()=>{ tasksCustomFrom = el.value||null; render(); });
+  });
+  document.querySelectorAll('[data-task-range-to]').forEach(el=>{
+    el.addEventListener('change', ()=>{ tasksCustomTo = el.value||null; render(); });
+  });
+  document.querySelectorAll('[data-task-cat-filter]').forEach(el=>{
+    el.addEventListener('click', ()=>{ tasksCatFilter = el.getAttribute('data-task-cat-filter'); render(); });
+  });
+  document.querySelectorAll('[data-drag-task]').forEach(el=>{
+    el.addEventListener('dragstart', e=>{ e.dataTransfer.setData('text/plain', el.getAttribute('data-drag-task')); });
+  });
+  document.querySelectorAll('[data-drop-zone-task]').forEach(zone=>{
+    zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', ()=> zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', e=>{
+      e.preventDefault(); zone.classList.remove('drag-over');
+      const key = e.dataTransfer.getData('text/plain');
+      if(!key) return;
+      const [did,gid,iid] = key.split('|');
+      const status = zone.getAttribute('data-drop-zone-task');
+      const {item} = locateItem(did, gid||null, iid);
+      if(!item || item.kind!=='task') return;
+      updateItem(did, gid||null, iid, {status});
+      showToast('status updated');
+    });
+  });
+
   document.querySelectorAll('[data-edit-item-title]').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
     el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-item-title').split('|'); updateItem(did,gid,iid,{title: el.value||'Untitled item'}); });
@@ -1261,6 +1439,10 @@ function attachHandlers(){
   document.querySelectorAll('[data-edit-item-field]').forEach(el=>{
     el.addEventListener('click', e=>e.stopPropagation());
     el.addEventListener('change', ()=>{ const [did,gid,iid,key]=el.getAttribute('data-edit-item-field').split('|'); updateItemField(did,gid,iid,key,el.value); });
+  });
+  document.querySelectorAll('[data-edit-item-due]').forEach(el=>{
+    el.addEventListener('click', e=>e.stopPropagation());
+    el.addEventListener('change', ()=>{ const [did,gid,iid]=el.getAttribute('data-edit-item-due').split('|'); updateItem(did,gid,iid,{dueDate: el.value||null}); });
   });
   document.querySelectorAll('[data-set-item-status]').forEach(el=>{
     el.addEventListener('click', e=>{
