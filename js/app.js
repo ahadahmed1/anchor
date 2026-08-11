@@ -827,7 +827,7 @@ function renderItemsBoard(d){
     const inCol = items.filter(it=>itemHealth(it)===health);
     html += `<div class="board-col">
       <div class="board-col-head"><span class="board-col-dot ${health}"></span>${HEALTH_LABEL[health]}<span class="board-col-count">${inCol.length}</span></div>
-      <div class="board-col-body">
+      <div class="board-col-body" data-drop-zone-item="${d.id}|${health}">
         ${inCol.length ? inCol.map(it=>renderBoardItemCard(d,it)).join('') : '<div class="empty-hint">nothing here</div>'}
       </div>
     </div>`;
@@ -838,7 +838,8 @@ function renderItemsBoard(d){
 }
 function renderBoardItemCard(d, it){
   const sub = it.kind==='task' ? checklistProgress(it)+'%' : dueBadge(it);
-  return `<div class="board-card" data-open-item="${d.id}|${it._gid||''}|${it.id}">
+  const draggable = it.kind==='task';
+  return `<div class="board-card" data-open-item="${d.id}|${it._gid||''}|${it.id}" ${draggable?`draggable="true" data-drag-item="${d.id}|${it._gid||''}|${it.id}"`:''}>
     <div class="board-card-code">${it.code}</div>
     <div class="board-card-name">${escapeHtml(it.title)}</div>
     <div class="board-card-sub">${sub}</div>
@@ -1107,6 +1108,30 @@ function attachHandlers(){
       if(gid) expandedGroups.add(gid);
       expandedItems.add(iid);
       render();
+    });
+  });
+
+  /* Board drag & drop — only task-kind items are draggable; dropping sets status */
+  document.querySelectorAll('[data-drag-item]').forEach(el=>{
+    el.addEventListener('dragstart', e=>{
+      e.dataTransfer.setData('text/plain', el.getAttribute('data-drag-item'));
+    });
+  });
+  document.querySelectorAll('[data-drop-zone-item]').forEach(zone=>{
+    zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', ()=> zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', e=>{
+      e.preventDefault(); zone.classList.remove('drag-over');
+      const key = e.dataTransfer.getData('text/plain');
+      if(!key) return;
+      const [did,gid,iid] = key.split('|');
+      const [zoneDid, health] = zone.getAttribute('data-drop-zone-item').split('|');
+      if(did !== zoneDid) return;
+      const {item} = locateItem(did, gid, iid);
+      if(!item || item.kind!=='task') return;
+      const status = health==='attention' ? 'blocked' : health==='done' ? 'done' : 'in_progress';
+      updateItem(did, gid, iid, {status});
+      showToast('status updated');
     });
   });
   document.querySelectorAll('[data-edit-item-title]').forEach(el=>{
