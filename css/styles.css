@@ -218,9 +218,8 @@ select{appearance:none;-webkit-appearance:none;cursor:pointer;background-repeat:
 .board-col-count{margin-left:auto;background:var(--panel-alt);padding:2px 7px;border-radius:20px;font-size:10px;color:var(--text-faint);}
 .board-col-body{flex:1;overflow-y:auto;padding:9px;display:flex;flex-direction:column;gap:8px;min-height:70px;transition:background .12s ease;}
 .board-col-body.drag-over{background:var(--panel-hover);}
-.board-card{background:var(--panel-alt);border:1px solid var(--border-soft);border-radius:8px;padding:10px 11px;cursor:grab;transition:border-color .12s ease;}
+.board-card{background:var(--panel-alt);border:1px solid var(--border-soft);border-radius:8px;padding:10px 11px;cursor:pointer;transition:border-color .12s ease;}
 .board-card:hover{border-color:var(--text-faint);}
-.board-card:active{cursor:grabbing;}
 .board-card-code{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--text-faint);}
 .board-card-name{font-size:12.5px;font-weight:500;margin-top:3px;color:var(--text);}
 .board-card-sub{font-size:10.5px;color:var(--text-faint);margin-top:6px;}
@@ -264,3 +263,53 @@ html[data-theme="light"] .modal-overlay{background:rgba(30,33,40,0.4);}
 }
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .loading{grid-column:1/-1;display:flex;align-items:center;justify-content:center;padding:60px;color:var(--text-faint);font-family:'JetBrains Mono',monospace;font-size:12px;}
+
+/* ---- Health states (attention / on_track / done) ---- */
+.status-stripe.attention, .node-stripe.attention, .board-col-dot.attention{background:var(--amber);}
+.status-stripe.on_track, .node-stripe.on_track, .board-col-dot.on_track{background:var(--cyan);}
+.badge.attention, .node-badge.attention{background:var(--amber-dim);color:var(--amber-text);}
+.badge.on_track, .node-badge.on_track{background:var(--cyan-dim);color:var(--cyan-text);}
+
+/* ---- Due-state chips (recurring items) ---- */
+.due-chip{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:0.03em;padding:4px 8px;border-radius:20px;white-space:nowrap;flex-shrink:0;}
+.due-chip.overdue{background:rgba(240,87,106,0.14);color:var(--danger);}
+.due-chip.due_soon{background:var(--amber-dim);color:var(--amber-text);}
+.due-chip.upcoming{background:var(--cyan-dim);color:var(--cyan-text);}
+.due-chip.unknown{background:var(--slate-dim);color:var(--slate-text);}
+.due-chip.done{background:var(--green-dim);color:var(--green-text);}
+
+/* ---- Category chips ---- */
+.chip-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;}
+.chip{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);background:transparent;border:1px solid var(--border);padding:6px 11px;border-radius:20px;cursor:pointer;transition:all .12s ease;}
+.chip:hover{color:var(--text);border-color:var(--text-faint);}
+.chip.active{background:var(--panel-alt);color:var(--text);border-color:var(--text-faint);}
+.chip-dot{display:inline-block;width:6px;height:6px;border-radius:2px;margin-right:6px;}
+.chip-dot.cyan{background:var(--cyan);}
+.chip-dot.amber{background:var(--amber);}
+.chip-dot.green{background:var(--green);}
+.chip-dot.slate{background:var(--slate);}
+
+/* ---- Log entries (recurring items) ---- */
+.log-list{display:flex;flex-direction:column;gap:6px;margin-bottom:8px;}
+.log-item{display:flex;align-items:flex-start;gap:9px;padding:7px 9px;background:var(--panel);border:1px solid var(--border-soft);border-radius:6px;}
+.log-item-body{flex:1;min-width:0;}
+.log-item-date{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--text-faint);}
+.log-item-note{font-size:12.5px;color:var(--text);margin-top:2px;}
+.log-item-meta{font-size:10.5px;color:var(--text-faint);margin-top:2px;}
+.add-log-row{display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;}
+.add-log-row input{flex:1;min-width:100px;font-size:12.5px;padding:7px 9px;}
+.add-log-row .qa-btn{flex-shrink:0;}
+
+/* ---- Recurrence editor ---- */
+.recur-row{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;}
+.recur-row .field{margin-bottom:0;flex:1;min-width:90px;}
+.due-summary{display:flex;align-items:center;gap:8px;margin-bottom:12px;}
+
+input[type=date], input[type=number]{
+  width:100%;background:var(--panel);border:1px solid var(--border);color:var(--text);font-family:'Inter',sans-serif;
+  font-size:13px;padding:8px 10px;border-radius:6px;outline:none;
+}
+input[type=date]:focus, input[type=number]:focus{border-color:var(--cyan);}
+
+/* ---- Extra fields (category-specific) ---- */
+.extra-fields{display:flex;flex-direction:column;gap:10px;margin-bottom:12px;}
