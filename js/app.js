@@ -249,6 +249,18 @@ function timeAgo(iso){
 
 /* ---- Storage + migration ---- */
 async function loadDomains(){
+  await Sync.init();
+  if(Sync.isOn()){
+    try{
+      const remote = await Sync.pull();
+      if(remote){
+        domains = JSON.parse(remote);
+        await Store.set('domains', remote);
+        render();
+        return;
+      }
+    }catch(e){ /* fall through to local */ }
+  }
   try{
     const raw = await Store.get('domains');
     if(raw){ domains = JSON.parse(raw); render(); return; }
@@ -299,8 +311,10 @@ function legacyStoryToItem(s){
   };
 }
 async function persist(){
-  try{ await Store.set('domains', JSON.stringify(domains)); }
+  const json = JSON.stringify(domains);
+  try{ await Store.set('domains', json); }
   catch(e){ showToast('save failed — storage blocked'); }
+  if(Sync.isOn()) Sync.push(json, new Date().toISOString());
 }
 
 /* ---- Theme ---- */
@@ -1626,6 +1640,87 @@ document.querySelectorAll('#healthTabs .tab').forEach(tab=>{
   });
 });
 document.getElementById('searchInput').addEventListener('input', (e)=>{ searchTerm = e.target.value; render(); });
+
+/* ---- Sync panel ---- */
+let syncPanelOpen = false;
+const syncBtn = document.getElementById('syncBtn');
+function updateSyncBtn(){
+  syncBtn.textContent = Sync.status==='syncing' ? 'Syncing…' : Sync.isOn() ? 'Synced' : 'Sync';
+  syncBtn.classList.toggle('on', Sync.isOn());
+  syncBtn.classList.toggle('syncing', Sync.status==='syncing');
+  syncBtn.classList.toggle('error', Sync.status==='error');
+}
+function openSyncPanel(){ syncPanelOpen = true; renderSyncPanel(); }
+function closeSyncPanel(){ syncPanelOpen = false; renderSyncPanel(); }
+function renderSyncPanel(){
+  const root = document.getElementById('syncRoot');
+  if(!syncPanelOpen){ root.innerHTML = ''; return; }
+  const on = Sync.isOn();
+  const statusLabel = {off:'Not set up on this device', syncing:'Syncing…', synced:'Synced', error:'Sync error — will retry on the next change'}[Sync.status];
+  root.innerHTML = `
+    <div class="modal-overlay" id="syncOverlay">
+      <div class="modal">
+        <div class="modal-title">Sync across devices</div>
+        <div class="modal-sub">${statusLabel}</div>
+        ${on ? `
+          <div class="field">
+            <span class="field-label">Your sync code</span>
+            <input type="text" readonly value="${escapeAttr(Sync.code)}" id="syncCodeDisplay">
+          </div>
+          <div class="empty-hint">Enter this code on another device — like an iPhone home-screen install — to link it and share this data.</div>
+          <div class="modal-actions">
+            <button class="modal-cancel" id="syncStop">Stop syncing</button>
+            <button class="modal-save" id="syncClose">Done</button>
+          </div>
+        ` : `
+          <div class="empty-hint">Browser storage is per-device (an iPhone home-screen install can't see data added in Safari). Sync keeps them in step.</div>
+          <div class="field"><button class="qa-btn" id="syncStart" type="button">Start syncing this device</button></div>
+          <div class="empty-hint">Already have a code from another device?</div>
+          <div class="field"><input type="text" placeholder="Paste sync code" id="syncCodeInput"></div>
+          <div class="modal-actions">
+            <button class="modal-cancel" id="syncClose">Cancel</button>
+            <button class="modal-save" id="syncLink">Link device</button>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+  document.getElementById('syncOverlay').addEventListener('click', e=>{ if(e.target.id==='syncOverlay') closeSyncPanel(); });
+  document.getElementById('syncClose').addEventListener('click', closeSyncPanel);
+  if(on){
+    document.getElementById('syncStop').addEventListener('click', async ()=>{
+      if(confirm('Stop syncing this device? Your local data stays — it just stops syncing.')){
+        await Sync.stop();
+        showToast('sync stopped');
+        renderSyncPanel();
+      }
+    });
+    document.getElementById('syncCodeDisplay').addEventListener('click', e=>e.target.select());
+  } else {
+    document.getElementById('syncStart').addEventListener('click', async ()=>{
+      await Sync.start();
+      await persist(); /* push what's already on this device up under the new code */
+      showToast('sync started — enter this code on your other devices');
+      renderSyncPanel();
+    });
+    document.getElementById('syncLink').addEventListener('click', async ()=>{
+      const val = document.getElementById('syncCodeInput').value.trim();
+      if(!val){ showToast('enter a sync code'); return; }
+      const remote = await Sync.link(val);
+      if(remote){
+        try{ domains = JSON.parse(remote); await Store.set('domains', remote); render(); }
+        catch(e){ showToast('that code returned bad data'); }
+      } else if(Sync.status==='error'){
+        showToast('couldn\'t reach sync — check the code and your connection');
+      } else {
+        showToast('linked — no data synced there yet, this device\'s data will push on your next change');
+      }
+      renderSyncPanel();
+    });
+  }
+}
+syncBtn.addEventListener('click', openSyncPanel);
+Sync.onChange(()=>{ updateSyncBtn(); if(syncPanelOpen) renderSyncPanel(); });
 
 /* ---- PWA: install prompt ---- */
 let deferredInstall = null;

@@ -92,6 +92,16 @@ h1{font-family:"Arial Narrow","Helvetica Neue Condensed",Helvetica,Arial,sans-se
 .install-btn:hover{background:var(--accent-dim);}
 .install-btn[hidden]{display:none;}
 
+.sync-btn{
+  background:none;border:1px solid var(--border);color:var(--text-dim);
+  font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:8px 13px;border-radius:7px;cursor:pointer;
+  transition:background .12s ease, border-color .12s ease, color .12s ease;
+}
+.sync-btn:hover{border-color:var(--text-faint);color:var(--text);}
+.sync-btn.on{border-color:var(--cyan);color:var(--cyan-text);}
+.sync-btn.syncing{border-color:var(--accent);color:var(--accent-text);}
+.sync-btn.error{border-color:var(--danger);color:var(--danger);}
+
 /* ---- Top-level view switch (Domains / Tasks) ---- */
 .view-switch{display:flex;gap:2px;background:var(--panel-alt);border:1px solid var(--border);border-radius:12px;padding:3px;flex-shrink:0;}
 .view-switch button{background:none;border:none;color:var(--text-faint);font-size:12px;font-weight:600;padding:7px 14px;border-radius:9px;cursor:pointer;}
