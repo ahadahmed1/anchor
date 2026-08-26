@@ -1,6 +1,6 @@
 /* ---- Anchor service worker ----
    Bump VERSION whenever the shell files change; old caches are dropped on activate. */
-const VERSION = 'v5';
+const VERSION = 'v6';
 const SHELL_CACHE = 'ledger-shell-' + VERSION;
 const RUNTIME_CACHE = 'ledger-runtime-' + VERSION;
 

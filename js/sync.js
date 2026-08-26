@@ -82,7 +82,10 @@ const Sync = (function(){
     }
   }
 
-  /** Returns the remote domains JSON string, or null if nothing's synced yet / on failure. */
+  /** Returns {data, updatedAt} — the remote domains JSON string and the stamp it was pushed
+      with — or null if nothing's synced yet / on failure. The caller needs updatedAt to tell
+      whether the remote copy is actually newer than what's on this device; without it the only
+      possible policy is "remote always wins", which silently discards edits made offline. */
   async function pull(){
     if(!code) return null;
     status = 'syncing'; notify();
@@ -92,7 +95,7 @@ const Sync = (function(){
       if(!res.ok) throw new Error('pull failed: ' + res.status);
       const body = await res.json();
       status = 'synced'; lastSyncedAt = new Date().toISOString(); notify();
-      return body.data;
+      return {data: body.data, updatedAt: body.updatedAt};
     }catch(e){
       status = 'error'; notify();
       return null;

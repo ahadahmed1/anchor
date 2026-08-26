@@ -79,9 +79,30 @@ If `localStorage` is unavailable — private browsing, blocked cookies — `Stor
 to an in-memory map so nothing throws, the app stays usable for the session, and a toast
 warns that changes won't be saved. `Store.persistent` tells you which mode you're in.
 
-Everything is per-browser and per-origin; there is no sync or server. If the data grows
-past a few MB, `Store` is the single place to swap in IndexedDB — nothing else in the app
-touches storage.
+Storage is per-browser and per-origin. If the data grows past a few MB, `Store` is the
+single place to swap in IndexedDB — nothing else in the app touches storage.
+
+## Cross-device sync
+
+Off by default. Because storage is per-origin, data entered in Safari does not appear in an
+iOS home-screen install of the same URL — they are separate origins. Turning sync on generates
+a long random **sync code** that is both the lookup key and the bearer secret; entering it on
+another device links the two. There are no accounts. See `worker/README.md` for the one-time
+Cloudflare deploy, and set `ENDPOINT` in `js/sync.js` to the deployed URL.
+
+Local storage stays the source of truth — `persist()` writes locally first and pushes after,
+so a failed push never blocks a save.
+
+**Conflicts resolve by timestamp, newest wins.** `persist()` stamps `domainsUpdatedAt` with the
+same value it pushes, so a copy that synced cleanly carries identical stamps on both sides. At
+load, `pickCopy()` compares the local stamp against the remote one and keeps the newer; when
+local is newer — edits made while pushes were failing — they are kept and pushed rather than
+overwritten. Do **not** change `loadDomains()` to take the remote copy unconditionally: that
+silently destroys anything edited offline.
+
+Two caveats. Stamps come from each device's own clock, so a badly wrong clock wins arguments it
+should lose. And resolution is whole-document, not per-field: the newer copy wins entirely, so
+simultaneous edits to different domains on two devices are not merged.
 
 ## Service worker
 

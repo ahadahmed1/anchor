@@ -248,15 +248,57 @@ function timeAgo(iso){
 }
 
 /* ---- Storage + migration ---- */
+/* Which copy to trust at load when sync is on and the remote has data.
+   Stamps are ISO-8601 UTC strings (always from toISOString), so they compare correctly
+   as plain strings.
+     'same'   — the stamps match, so the remote copy IS this device's copy: persist()
+                writes one timestamp locally and pushes that same value.
+     'local'  — this device has edits newer than the remote, i.e. made while the push
+                couldn't go through. Keep them and push, don't overwrite them.
+     'remote' — another device has pushed since this one last wrote.
+   A local copy with no stamp predates this timestamping (or was written by an older
+   build), so there's nothing to compare and remote wins, as it did before. */
+function pickCopy(localData, localAt, remoteAt){
+  if(!localData) return 'remote';
+  if(!localAt || !remoteAt) return 'remote';
+  if(remoteAt > localAt) return 'remote';
+  if(remoteAt < localAt) return 'local';
+  return 'same';
+}
 async function loadDomains(){
   await Sync.init();
   if(Sync.isOn()){
     try{
       const remote = await Sync.pull();
-      if(remote){
-        domains = JSON.parse(remote);
-        await Store.set('domains', remote);
+      if(remote && remote.data){
+        const localRaw = await Store.get('domains');
+        const localAt = await Store.get('domainsUpdatedAt');
+        const winner = pickCopy(localRaw, localAt, remote.updatedAt);
+        if(winner === 'remote'){
+          domains = JSON.parse(remote.data);
+          await Store.set('domains', remote.data);
+          await Store.set('domainsUpdatedAt', remote.updatedAt);
+          render();
+          return;
+        }
+        /* Local wins. Parse before discarding the remote copy: if this device's stored
+           JSON is corrupt, fall through to the normal local path rather than losing both. */
+        try{
+          domains = JSON.parse(localRaw);
+        }catch(e){
+          domains = JSON.parse(remote.data);
+          await Store.set('domains', remote.data);
+          await Store.set('domainsUpdatedAt', remote.updatedAt);
+          render();
+          return;
+        }
         render();
+        if(winner === 'local'){
+          /* Unpushed offline edits — get them up now, and say so, because this is the
+             one case where the two devices were genuinely out of step. */
+          Sync.push(localRaw, localAt);
+          showToast('kept this device\'s newer changes and pushed them');
+        }
         return;
       }
     }catch(e){ /* fall through to local */ }
@@ -312,9 +354,15 @@ function legacyStoryToItem(s){
 }
 async function persist(){
   const json = JSON.stringify(domains);
-  try{ await Store.set('domains', json); }
+  /* One timestamp for both the local write and the push, so a copy that syncs cleanly
+     carries identical stamps on both sides and compares as 'same' on the next load. */
+  const updatedAt = new Date().toISOString();
+  try{
+    await Store.set('domains', json);
+    await Store.set('domainsUpdatedAt', updatedAt);
+  }
   catch(e){ showToast('save failed — storage blocked'); }
-  if(Sync.isOn()) Sync.push(json, new Date().toISOString());
+  if(Sync.isOn()) Sync.push(json, updatedAt);
 }
 
 /* ---- Theme ---- */
@@ -1707,8 +1755,15 @@ function renderSyncPanel(){
       const val = document.getElementById('syncCodeInput').value.trim();
       if(!val){ showToast('enter a sync code'); return; }
       const remote = await Sync.link(val);
-      if(remote){
-        try{ domains = JSON.parse(remote); await Store.set('domains', remote); render(); }
+      /* Linking is an explicit "adopt that code's data" action, so the remote copy wins
+         here regardless of stamps — unlike loadDomains(), which has to compare. */
+      if(remote && remote.data){
+        try{
+          domains = JSON.parse(remote.data);
+          await Store.set('domains', remote.data);
+          await Store.set('domainsUpdatedAt', remote.updatedAt);
+          render();
+        }
         catch(e){ showToast('that code returned bad data'); }
       } else if(Sync.status==='error'){
         showToast('couldn\'t reach sync — check the code and your connection');
