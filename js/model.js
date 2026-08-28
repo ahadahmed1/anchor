@@ -79,6 +79,8 @@ export function emptyState(){
   return {version: STATE_VERSION, assets: []};
 }
 
+/* The three constructors accept their own timestamps. Loading from storage needs that to
+   preserve history, and it keeps tests able to build a record that was created last year. */
 export function makeAsset(props = {}){
   const stamp = nowStamp();
   return {
@@ -88,9 +90,9 @@ export function makeAsset(props = {}){
     fields: {...(props.fields || {})},
     assets: [],
     items: [],
-    createdAt: stamp,
-    updatedAt: stamp,
-    deletedAt: null,
+    createdAt: props.createdAt || stamp,
+    updatedAt: props.updatedAt || stamp,
+    deletedAt: props.deletedAt || null,
   };
 }
 
@@ -104,9 +106,9 @@ export function makeItem(props = {}){
     leadDays: props.leadDays != null ? Number(props.leadDays) : null,
     checklist: props.checklist || [],
     log: [],
-    createdAt: stamp,
-    updatedAt: stamp,
-    deletedAt: null,
+    createdAt: props.createdAt || stamp,
+    updatedAt: props.updatedAt || stamp,
+    deletedAt: props.deletedAt || null,
   };
 }
 
@@ -123,8 +125,8 @@ export function makeEntry(props = {}){
     /* Household attribution. Unused until identity exists, but entries are append-only and
        backfilling this later would mean every existing entry reads as "unknown". */
     by: props.by || null,
-    createdAt: stamp,
-    deletedAt: null,
+    createdAt: props.createdAt || stamp,
+    deletedAt: props.deletedAt || null,
   };
 }
 
@@ -308,34 +310,20 @@ export function normalize(raw){
   if(!raw || typeof raw !== 'object' || !Array.isArray(raw.assets)) return emptyState();
   const asset = a => {
     if(!a || typeof a !== 'object' || !a.id) return null;
-    const out = makeAsset({id: a.id, name: a.name, category: a.category, fields: a.fields});
-    out.createdAt = a.createdAt || out.createdAt;
-    out.updatedAt = a.updatedAt || out.updatedAt;
-    out.deletedAt = a.deletedAt || null;
+    const out = makeAsset(a);
     out.assets = (Array.isArray(a.assets) ? a.assets : []).map(asset).filter(Boolean);
     out.items = (Array.isArray(a.items) ? a.items : []).map(item).filter(Boolean);
     return out;
   };
   const item = i => {
     if(!i || typeof i !== 'object' || !i.id) return null;
-    const out = makeItem({
-      id: i.id, name: i.name, notes: i.notes, schedule: i.schedule,
-      leadDays: i.leadDays, checklist: Array.isArray(i.checklist) ? i.checklist : [],
-    });
-    out.createdAt = i.createdAt || out.createdAt;
-    out.updatedAt = i.updatedAt || out.updatedAt;
-    out.deletedAt = i.deletedAt || null;
+    const out = makeItem({...i, checklist: Array.isArray(i.checklist) ? i.checklist : []});
     out.log = (Array.isArray(i.log) ? i.log : []).map(entry).filter(Boolean);
     return out;
   };
   const entry = e => {
     if(!e || typeof e !== 'object' || !e.id) return null;
-    const out = makeEntry({
-      id: e.id, date: e.date, note: e.note, cost: e.cost, mileage: e.mileage, by: e.by,
-    });
-    out.createdAt = e.createdAt || out.createdAt;
-    out.deletedAt = e.deletedAt || null;
-    return out;
+    return makeEntry(e);
   };
   return {version: STATE_VERSION, assets: raw.assets.map(asset).filter(Boolean)};
 }

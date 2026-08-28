@@ -1,16 +1,23 @@
 /* ---- Anchor service worker ----
    Bump VERSION whenever the shell files change; old caches are dropped on activate. */
-const VERSION = 'v4';
-const SHELL_CACHE = 'ledger-shell-' + VERSION;
-const RUNTIME_CACHE = 'ledger-runtime-' + VERSION;
+const VERSION = 'v7';
+const SHELL_CACHE = 'anchor-shell-' + VERSION;
+const RUNTIME_CACHE = 'anchor-runtime-' + VERSION;
 
-/* Relative URLs so the app works from any sub-path (GitHub Pages, /app/, ...). */
+/* Relative URLs so the app works from any sub-path (GitHub Pages, /app/, ...).
+   Every module is listed: they are fetched individually, so a missing one means the app
+   half-loads offline rather than failing loudly. */
 const SHELL = [
   './',
   'index.html',
   'css/styles.css',
-  'js/storage.js',
   'js/app.js',
+  'js/view.js',
+  'js/timeline.js',
+  'js/model.js',
+  'js/schedule.js',
+  'js/persist.js',
+  'js/storage.js',
   'manifest.json',
   'icons/favicon.svg',
   'icons/icon-192.png',
