@@ -6,11 +6,15 @@
    All interaction is delegated from two roots, so nothing needs re-binding after a render. */
 
 import { loadState, saveState, loadTheme, saveTheme } from './persist.js';
-import { addAsset, addItem, logCompletion, findAsset } from './model.js';
+import {
+  addAsset, addItem, logCompletion, findAsset, findItem,
+  updateItem, deleteItem, deleteEntry, liveLog, assetMileage,
+} from './model.js';
 import { buildTimeline } from './timeline.js';
+import { nextDue } from './schedule.js';
 import {
   renderTimeline, renderAssets, renderTabs, renderStorageWarning,
-  renderAddAsset, renderAddItem, scheduleFromForm,
+  renderAddAsset, renderAddItem, renderItemDetail, scheduleFromForm, PRESETS,
 } from './view.js';
 
 const appEl = document.getElementById('app');
@@ -22,6 +26,8 @@ let storageStatus = 'ok';
 /* View-only state. Nothing here is persisted: it describes what is open on screen, not data. */
 const ui = {
   tab: 'due',
+  itemId: null,                 // set when viewing an item's detail page
+  editing: null,                // the single field currently editable, per ADR-0003
   openLogId: null,              // mileage item awaiting an odometer reading
   addingAssetUnder: undefined,  // undefined = closed; null = top level; id = nested
   addingItemFor: null,
@@ -33,33 +39,62 @@ const ui = {
    path would 404 on a deep link. See ADR-0004. */
 
 function readRoute(){
-  ui.tab = location.hash === '#/assets' ? 'assets' : 'due';
+  const hash = location.hash || '';
+  const item = /^#\/item\/(.+)$/.exec(hash);
+  ui.itemId = item ? decodeURIComponent(item[1]) : null;
+  ui.tab = hash === '#/assets' ? 'assets' : 'due';
 }
-function goto(tab){
-  location.hash = tab === 'assets' ? '#/assets' : '';
+function goto(hash){
+  location.hash = hash;
 }
 
 /* ---- render ------------------------------------------------------------------------------ */
 
+/** The item being viewed, resolved with its asset and due state, or null if it is gone. */
+function currentRow(){
+  if(!ui.itemId) return null;
+  const hit = findItem(state, ui.itemId);
+  if(!hit) return null;
+  return {
+    ...hit,
+    due: nextDue({...hit.item, log: liveLog(hit.item)}, {mileage: assetMileage(hit.asset)}),
+  };
+}
+
 function render(){
-  chromeEl.innerHTML = renderTabs(ui.tab);
+  const row = currentRow();
+
+  /* The detail page is a place, not a panel: it replaces the tabs rather than sitting under
+     them, so there is one way back and it is the Back button. */
+  chromeEl.innerHTML = row ? '' : renderTabs(ui.tab);
 
   let html = renderStorageWarning(storageStatus);
 
-  if(ui.addingAssetUnder !== undefined) html += renderAddAsset(ui.addingAssetUnder);
-  if(ui.addingItemFor){
-    const hit = findAsset(state, ui.addingItemFor);
-    if(hit) html += renderAddItem(hit.asset, ui.itemPreset);
+  if(row){
+    html += renderItemDetail(row, ui);
+  } else {
+    if(ui.itemId){
+      /* Deep link to something deleted or never existing. Say so rather than showing a blank. */
+      html += `<p class="warning" role="alert">That item no longer exists.</p>`;
+      ui.itemId = null;
+    }
+    if(ui.addingAssetUnder !== undefined) html += renderAddAsset(ui.addingAssetUnder);
+    if(ui.addingItemFor){
+      const hit = findAsset(state, ui.addingItemFor);
+      if(hit) html += renderAddItem(hit.asset, ui.itemPreset);
+    }
+    html += ui.tab === 'assets'
+      ? renderAssets(state)
+      : renderTimeline(buildTimeline(state), ui.openLogId);
   }
-
-  html += ui.tab === 'assets'
-    ? renderAssets(state)
-    : renderTimeline(buildTimeline(state), ui.openLogId);
 
   appEl.innerHTML = html;
 
-  const focus = appEl.querySelector('.reading-input, .form input[name="name"]');
-  if(focus) focus.focus();
+  const focus = appEl.querySelector('.edit-input, .reading-input, .form input[name="name"]');
+  if(focus){
+    focus.focus();
+    if(focus.select && focus.dataset.field) focus.select();
+  }
 }
 
 /** Persist, and surface the outcome rather than letting a failed save pass unnoticed. */
@@ -71,8 +106,27 @@ function commit(){
 
 function closeForms(){
   ui.openLogId = null;
+  ui.editing = null;
   ui.addingAssetUnder = undefined;
   ui.addingItemFor = null;
+}
+
+/* ---- read-first editing ------------------------------------------------------------------ */
+/* One field is editable at a time. Committing on focusout means Escape has to leave the input
+   holding its original value before the re-render removes it — removing a focused input fires
+   a native blur, and a changed value would then be committed by the very keystroke meant to
+   discard it. See ADR-0003, where this cost a bug the first time round. */
+
+function commitField(input){
+  const key = input.dataset.field;
+  if(!key) return false;
+  const [field, id] = key.split(':');
+  const value = input.value;
+  const hit = findItem(state, id);
+  if(!hit) return false;
+  if(hit.item[field] === value) return false;   // nothing to save
+  updateItem(state, id, {[field]: value});
+  return true;
 }
 
 /* ---- events ------------------------------------------------------------------------------ */
@@ -84,6 +138,37 @@ chromeEl.addEventListener('click', e => {
 
 appEl.addEventListener('click', e => {
   const el = sel => e.target.closest(sel);
+
+  const open = el('[data-open-item]');
+  if(open){
+    closeForms();
+    return goto('#/item/' + encodeURIComponent(open.dataset.openItem));
+  }
+
+  if(el('[data-back]')){
+    closeForms();
+    return goto(ui.tab === 'assets' ? '#/assets' : '');
+  }
+
+  const edit = el('[data-edit]');
+  if(edit){
+    ui.editing = edit.dataset.edit;
+    return render();
+  }
+
+  const delItem = el('[data-delete-item]');
+  if(delItem){
+    deleteItem(state, delItem.dataset.deleteItem);
+    closeForms();
+    goto(ui.tab === 'assets' ? '#/assets' : '');
+    return commit();
+  }
+
+  const delEntry = el('[data-delete-entry]');
+  if(delEntry){
+    deleteEntry(state, ui.itemId, delEntry.dataset.deleteEntry);
+    return commit();
+  }
 
   const done = el('[data-done]');
   if(done){
@@ -122,10 +207,53 @@ appEl.addEventListener('click', e => {
 
 /* Changing the schedule preset re-renders the form so the right extra field appears. */
 appEl.addEventListener('change', e => {
-  const select = e.target.closest('[data-preset-select]');
-  if(!select) return;
-  ui.itemPreset = select.value;
-  render();
+  const preset = e.target.closest('[data-preset-select]');
+  if(preset){
+    ui.itemPreset = preset.value;
+    return render();
+  }
+
+  /* On the detail page the preset picker commits straight away — a chip-style choice, not a
+     form to submit. The empty option means "keep what it has". */
+  const sched = e.target.closest('[data-schedule-select]');
+  if(sched){
+    const chosen = PRESETS[sched.value];
+    if(chosen && chosen.schedule){
+      updateItem(state, sched.dataset.scheduleSelect, {schedule: {...chosen.schedule}});
+      ui.editing = null;
+      return commit();
+    }
+    /* Miles and one-off need a value alongside the choice, which a bare select cannot carry.
+       Left for the edit form rather than guessing a number on the user's behalf. */
+    ui.editing = null;
+    return render();
+  }
+});
+
+/* Commit on focusout. `blur` does not bubble, so focusout is what a delegated listener sees. */
+appEl.addEventListener('focusout', e => {
+  const input = e.target.closest('[data-field]');
+  if(!input || ui.editing !== input.dataset.field) return;
+  const changed = commitField(input);
+  ui.editing = null;
+  changed ? commit() : render();
+});
+
+appEl.addEventListener('keydown', e => {
+  const input = e.target.closest('[data-field]');
+  if(!input) return;
+
+  if(e.key === 'Escape'){
+    /* Restore before the re-render tears the input out, or the resulting native blur commits
+       the discarded text. This is the ADR-0003 mechanic, and it is why the value is rendered
+       as an attribute: defaultValue is the original. */
+    input.value = input.defaultValue;
+    ui.editing = null;
+    render();
+  } else if(e.key === 'Enter' && input.tagName !== 'TEXTAREA'){
+    e.preventDefault();
+    input.blur();
+  }
 });
 
 appEl.addEventListener('submit', e => {

@@ -50,13 +50,13 @@ export function renderRow(row, openId){
   const state = escapeHtml((due && due.state) || 'unknown');
   const open = openId === item.id;
   return `<li class="row ${state}${open ? ' row-open' : ''}" data-item="${escapeHtml(item.id)}">
-      <div class="row-body">
-        <div class="row-text">
+      <button class="row-body" data-open-item="${escapeHtml(item.id)}">
+        <span class="row-text">
           <span class="row-name">${escapeHtml(item.name || 'Untitled')}</span>
           <span class="row-sub">${escapeHtml(asset.name)} · ${escapeHtml(relativeDue(due))}</span>
-        </div>
+        </span>
         <span class="row-when ${state}" aria-hidden="true">${escapeHtml(shortDue(due))}</span>
-      </div>
+      </button>
       ${doneControl(row, openId)}
     </li>`;
 }
@@ -120,9 +120,11 @@ function renderAssetNode(asset, depth){
 
 function renderAssetItem(item){
   const logged = liveLog(item).length;
-  return `<li class="asset-item" data-item="${escapeHtml(item.id)}">
-      <span class="row-name">${escapeHtml(item.name || 'Untitled')}</span>
-      <span class="row-sub">${escapeHtml(describe(item.schedule))}${logged ? ` · ${logged} logged` : ''}</span>
+  return `<li class="asset-item">
+      <button class="asset-item-body" data-open-item="${escapeHtml(item.id)}">
+        <span class="row-name">${escapeHtml(item.name || 'Untitled')}</span>
+        <span class="row-sub">${escapeHtml(describe(item.schedule))}${logged ? ` · ${logged} logged` : ''}</span>
+      </button>
     </li>`;
 }
 
@@ -131,6 +133,114 @@ export function renderAssets(state){
   if(!roots.length) return renderEmpty();
   return `<ul class="assets">${roots.map(a => renderAssetNode(a, 0)).join('')}</ul>
     <button class="btn-primary add-asset" data-add-asset="1">Add an asset</button>`;
+}
+
+/* ---- item detail ------------------------------------------------------------------------- */
+/* Read-first: fields are text until clicked, one editable at a time. Carried over as a
+   principle from ADR-0003 — these screens are opened far more often to check something than
+   to change it, so they should read as a record rather than a form. */
+
+/**
+ * A field that displays as text and becomes an input when it is the one being edited.
+ * `key` is what app.js matches on; it is both the edit trigger and the input identity.
+ */
+export function editableField(key, value, {editing, placeholder = 'Add…', multiline = false} = {}){
+  const k = escapeHtml(key);
+  if(editing === key){
+    /* value= rather than a text node so the browser records it as defaultValue: Escape restores
+       from there before the input leaves the DOM. Removing a focused input fires a native blur,
+       which would otherwise commit the very edit being discarded. See ADR-0003. */
+    return multiline
+      ? `<textarea class="edit-input" data-field="${k}" rows="4">${escapeHtml(value)}</textarea>`
+      : `<input class="edit-input" data-field="${k}" value="${escapeHtml(value)}">`;
+  }
+  const shown = value == null || value === '' ? placeholder : value;
+  const empty = value == null || value === '' ? ' is-empty' : '';
+  return `<span class="editable${empty}" data-edit="${k}" tabindex="0" role="button">${escapeHtml(shown)}</span>`;
+}
+
+function renderLogEntry(entry){
+  const bits = [];
+  if(entry.mileage != null) bits.push(`${entry.mileage.toLocaleString()} mi`);
+  if(entry.cost) bits.push(escapeHtml(entry.cost));
+  if(entry.by) bits.push(escapeHtml(entry.by));
+  if(entry.note) bits.push(escapeHtml(entry.note));
+  return `<li class="log-entry" data-entry="${escapeHtml(entry.id)}">
+      <div class="log-text">
+        <span class="log-date">${escapeHtml(entry.date)}</span>
+        ${bits.length ? `<span class="log-meta">${bits.join(' · ')}</span>` : ''}
+      </div>
+      <button class="btn-quiet btn-small" data-delete-entry="${escapeHtml(entry.id)}"
+              aria-label="Remove this entry">Remove</button>
+    </li>`;
+}
+
+export function renderItemDetail(row, ui = {}){
+  const {item, asset, due} = row;
+  const state = escapeHtml((due && due.state) || 'unknown');
+  const entries = liveLog(item)
+    .slice()
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+  const presetOptions = Object.entries(PRESETS)
+    .map(([key, p]) => `<option value="${key}">${escapeHtml(p.label)}</option>`).join('');
+
+  return `<article class="detail">
+      <button class="btn-quiet back" data-back="1">‹ Back</button>
+
+      <h1 class="detail-name">${editableField(`name:${item.id}`, item.name, {editing: ui.editing, placeholder: 'Untitled'})}</h1>
+      <p class="detail-asset">${escapeHtml(asset.name)}</p>
+
+      <div class="detail-due ${state}">
+        <span class="detail-due-text">${escapeHtml(relativeDue(due))}</span>
+        ${due && due.date ? `<span class="detail-due-date">${escapeHtml(due.date)}</span>` : ''}
+      </div>
+
+      ${renderDoneAction(row, ui)}
+
+      <section class="detail-block">
+        <h2 class="detail-label">Schedule</h2>
+        ${ui.editing === `schedule:${item.id}`
+          ? `<select class="edit-input" data-schedule-select="${escapeHtml(item.id)}">
+               <option value="">${escapeHtml(describe(item.schedule))} (keep)</option>
+               ${presetOptions}
+             </select>`
+          : `<span class="editable" data-edit="schedule:${escapeHtml(item.id)}" tabindex="0" role="button">${escapeHtml(describe(item.schedule))}</span>`}
+      </section>
+
+      <section class="detail-block">
+        <h2 class="detail-label">Notes</h2>
+        ${editableField(`notes:${item.id}`, item.notes, {editing: ui.editing, multiline: true, placeholder: 'Add a note…'})}
+      </section>
+
+      <section class="detail-block">
+        <h2 class="detail-label">History <span class="bucket-count">${entries.length}</span></h2>
+        ${entries.length
+          ? `<ul class="log">${entries.map(renderLogEntry).join('')}</ul>`
+          : `<p class="detail-empty">Nothing logged yet.</p>`}
+      </section>
+
+      <button class="btn-danger" data-delete-item="${escapeHtml(item.id)}">Delete this item</button>
+    </article>`;
+}
+
+/** The completion control, shared in shape with the timeline row but sized for the page. */
+function renderDoneAction(row, ui){
+  const id = escapeHtml(row.item.id);
+  if(needsReading(row)){
+    if(ui.openLogId === row.item.id){
+      const current = assetMileage(row.asset);
+      return `<form class="reading detail-action" data-log-form="${id}">
+          <input class="reading-input" type="number" inputmode="numeric" name="mileage"
+                 value="${current == null ? '' : escapeHtml(current)}"
+                 aria-label="Odometer reading" required>
+          <button class="btn-primary" type="submit">Log it</button>
+          <button class="btn-quiet" type="button" data-cancel-log="1">Cancel</button>
+        </form>`;
+    }
+    return `<button class="btn-primary detail-action" data-open-log="${id}">Mark done…</button>`;
+  }
+  return `<button class="btn-primary detail-action" data-done="${id}">Mark done today</button>`;
 }
 
 /* ---- inline forms ------------------------------------------------------------------------ */

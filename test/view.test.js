@@ -189,3 +189,106 @@ test('storage trouble is stated plainly and only when real', () => {
   assert.match(renderStorageWarning('corrupt'), /set aside/);
   assert.ok(renderStorageWarning('unavailable').includes('role="alert"'));
 });
+
+/* ---- item detail ------------------------------------------------------------------------- */
+
+import { renderItemDetail, editableField } from '../js/view.js';
+import { nextDue } from '../js/schedule.js';
+import { findItem, liveLog, assetMileage, deleteEntry } from '../js/model.js';
+
+/** Resolve an item the way app.js does before handing it to the detail view. */
+function detailRow(s, id, now = NOW){
+  const hit = findItem(s, id);
+  return {...hit, due: nextDue({...hit.item, log: liveLog(hit.item)},
+    {now, mileage: assetMileage(hit.asset)})};
+}
+
+test('editableField is text until it is the field being edited', () => {
+  const read = editableField('name:i1', 'Oil change', {editing: null});
+  assert.ok(read.includes('data-edit="name:i1"'), 'clicking it starts an edit');
+  assert.equal(read.includes('<input'), false, 'no input while reading');
+
+  const write = editableField('name:i1', 'Oil change', {editing: 'name:i1'});
+  assert.ok(write.includes('data-field="name:i1"'));
+  assert.ok(write.includes('value="Oil change"'),
+    'rendered as an attribute so defaultValue holds the original for Escape');
+});
+
+test('editableField shows a placeholder when empty, and escapes both', () => {
+  const empty = editableField('notes:i1', '', {editing: null, placeholder: 'Add a note…'});
+  assert.ok(empty.includes('Add a note…'));
+  assert.ok(empty.includes('is-empty'));
+  assert.equal(editableField('n:1', '<b>x</b>', {editing: null}).includes('<b>'), false);
+});
+
+test('a multiline field renders a textarea carrying its value as content', () => {
+  const html = editableField('notes:i1', 'line one', {editing: 'notes:i1', multiline: true});
+  assert.ok(html.includes('<textarea'));
+  assert.ok(html.includes('>line one</textarea>'), 'defaultValue comes from the content');
+});
+
+test('detail shows the item, its asset, due state and schedule in words', () => {
+  const {s, filter} = household();
+  logCompletion(s, filter.id, {date: '2026-05-01'});
+  const html = renderItemDetail(detailRow(s, filter.id));
+
+  assert.ok(html.includes('Furnace filter') || html.includes('Filter'));
+  assert.ok(html.includes('Furnace'), 'names the owning asset');
+  assert.ok(html.includes('Every 3 months'), 'schedule in plain language');
+  assert.ok(html.includes('data-back'), 'there is a way back');
+  assert.ok(html.includes('data-delete-item="' + filter.id + '"'));
+});
+
+test('detail lists history newest first, each entry removable', () => {
+  const {s, filter} = household();
+  logCompletion(s, filter.id, {date: '2026-01-10', note: 'first'});
+  logCompletion(s, filter.id, {date: '2026-05-01', note: 'second', cost: '18'});
+
+  const html = renderItemDetail(detailRow(s, filter.id));
+  assert.ok(html.indexOf('2026-05-01') < html.indexOf('2026-01-10'), 'newest first');
+  assert.ok(html.includes('18'), 'cost shown');
+  assert.ok(html.includes('data-delete-entry'));
+  assert.ok(html.includes('>2</span>'), 'history is counted');
+});
+
+test('detail hides tombstoned log entries', () => {
+  const {s, filter} = household();
+  const gone = logCompletion(s, filter.id, {date: '2026-09-09', note: 'mistake'});
+  logCompletion(s, filter.id, {date: '2026-05-01'});
+  deleteEntry(s, filter.id, gone.id);
+
+  const html = renderItemDetail(detailRow(s, filter.id));
+  assert.equal(html.includes('2026-09-09'), false);
+  assert.equal(html.includes('mistake'), false);
+  assert.ok(html.includes('2026-05-01'));
+});
+
+test('detail says so when nothing has been logged', () => {
+  const {s, filter} = household();
+  assert.ok(renderItemDetail(detailRow(s, filter.id)).includes('Nothing logged yet'));
+});
+
+test('REGRESSION: detail keeps the mileage prompt rather than a blind Mark done', () => {
+  const {s, oil} = household();
+  const closed = renderItemDetail(detailRow(s, oil.id), {});
+  assert.ok(closed.includes('data-open-log="' + oil.id + '"'));
+  assert.equal(closed.includes('data-done='), false);
+
+  const open = renderItemDetail(detailRow(s, oil.id), {openLogId: oil.id});
+  assert.ok(open.includes('data-log-form="' + oil.id + '"'));
+  assert.ok(open.includes('value="41000"'), 'prefilled from the asset odometer');
+});
+
+test('a date-driven item gets a plain Mark done today', () => {
+  const {s, filter} = household();
+  const html = renderItemDetail(detailRow(s, filter.id), {});
+  assert.ok(html.includes('data-done="' + filter.id + '"'));
+  assert.ok(html.includes('Mark done today'));
+});
+
+test('timeline rows and asset items both open the detail page', () => {
+  const {s, filter} = household();
+  const timeline = renderTimeline(buildTimeline(s, {now: NOW}));
+  assert.ok(timeline.includes('data-open-item="' + filter.id + '"'));
+  assert.ok(renderAssets(s).includes('data-open-item="' + filter.id + '"'));
+});
