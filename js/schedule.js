@@ -220,7 +220,20 @@ export function nextDue(item, ctx){
   }
 
   /* ---- interval by time ---- */
-  const base = latestLogDay(log) || parseDay((item.createdAt || '').slice(0, 10)) || now;
+  const logged = latestLogDay(log);
+
+  /* An explicit start date is when the thing is FIRST due, not the point an interval is
+     counted from — "every 3 months starting Sep 1" means do it on Sep 1, not Dec 1. Once
+     something has been logged the log takes over and the start date stops mattering. */
+  if(!logged){
+    const start = parseDay(sched.startDate);
+    if(start){
+      const days = daysBetween(now, start);
+      return {state: state(days, lead), date: formatDay(start), days, mileageRemaining: null, reason: null};
+    }
+  }
+
+  const base = logged || parseDay((item.createdAt || '').slice(0, 10)) || now;
   const due = addUnits(base, every, sched.unit);
   if(!due) return unknown('Unrecognised interval unit');
   const days = daysBetween(now, due);

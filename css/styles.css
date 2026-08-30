@@ -351,3 +351,25 @@ textarea.edit-input{ resize: vertical; line-height: 1.45; }
 
 /* A form appended after the detail article (the Assets-tab add form) needs separating from it. */
 .detail + .form, .warning + .form{ margin-top: 18px; }
+
+/* Custom interval: a count and its unit side by side. */
+.field-pair{ display: flex; gap: 8px; }
+.field-pair input{ flex: 1 1 90px; min-width: 0; }
+.field-pair select{ flex: 0 0 auto; }
+.field-pair input, .field-pair select{
+  min-height: var(--tap); padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--paper); color: var(--ink); font: inherit;
+}
+
+/* Start date: a statement with a way in, not a field demanding attention. */
+.startdate{
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 14px; color: var(--ink-soft);
+}
+.link{
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--accent); font: inherit; font-weight: 600;
+  text-decoration: underline; text-underline-offset: 2px;
+  min-height: var(--tap);
+}

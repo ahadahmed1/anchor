@@ -309,8 +309,8 @@ test('presetForSchedule recognises what an item is already on', () => {
   /* An exact match wins over the custom fallback, so a named preset reads as itself. */
   assert.equal(presetForSchedule({type: 'interval', every: 6, unit: 'months'}), '6-months');
   /* Anything else on a unit with a custom option falls back to that option. */
-  assert.equal(presetForSchedule({type: 'interval', every: 2, unit: 'weeks'}), 'custom-weeks');
-  assert.equal(presetForSchedule({type: 'interval', every: 4, unit: 'months'}), 'custom-months');
+  assert.equal(presetForSchedule({type: 'interval', every: 2, unit: 'weeks'}), 'custom');
+  assert.equal(presetForSchedule({type: 'interval', every: 4, unit: 'months'}), 'custom');
   assert.equal(presetForSchedule({type: 'interval', every: 7000, unit: 'miles'}), 'miles');
 
   assert.equal(presetForSchedule({type: 'interval', every: 10, unit: 'days'}), '',
@@ -318,8 +318,11 @@ test('presetForSchedule recognises what an item is already on', () => {
   assert.equal(presetForSchedule(null), '');
 });
 
-test('a fixed preset needs no second step', () => {
-  const html = renderScheduleEditor({id: 'i1', schedule: {type: 'interval', every: 3, unit: 'months'}}, null);
+test('a named preset on an item with history commits straight from the dropdown', () => {
+  /* With a log there is no start date to offer, so there is nothing to submit. */
+  const item = {id: 'i1', schedule: {type: 'interval', every: 3, unit: 'months'},
+                log: [{id: 'l1', date: '2026-01-01'}]};
+  const html = renderScheduleEditor(item, null, {category: 'home'});
   assert.ok(html.includes('data-schedule-select="i1"'));
   assert.equal(html.includes('<form'), false, 'commits on choice, nothing to submit');
   assert.ok(html.includes('value="3-months" selected'), 'opens on what it already is');
@@ -555,49 +558,51 @@ test('a form open for a different asset does not leak onto this one', () => {
 
 test('the preset list offers weeks, and customs for weeks and months', () => {
   const keys = presetsFor({category: 'home'}).map(([k]) => k);
-  assert.deepEqual(keys, ['weekly', 'custom-weeks', 'monthly', '3-months', '6-months',
-                          'custom-months', 'yearly', 'once'],
-    'ascending by interval, miles absent for a home');
+  assert.deepEqual(keys, ['weekly', 'monthly', '3-months', '6-months', 'yearly', 'custom', 'once'],
+    'named intervals first, then the customs; miles absent for a home');
   assert.ok(presetsFor({category: 'car'}).map(([k]) => k).includes('miles'));
 });
 
-test('a custom interval asks for its count with the right label and default', () => {
+test('Custom asks for a number and a unit, not a separate option per unit', () => {
   const s = emptyState();
   const home = addAsset(s, null, {name: 'House', category: 'home'});
   const asset = findAsset(s, home.id).asset;
 
-  const weeks = renderAddItem(asset, 'custom-weeks');
-  assert.ok(weeks.includes('Weeks between'));
-  assert.ok(weeks.includes('value="2"'), 'sensible default');
-  assert.ok(weeks.includes('name="every"'));
+  const html = renderAddItem(asset, 'custom');
+  assert.ok(html.includes('name="every"'), 'a count');
+  assert.ok(html.includes('name="unit"'), 'and a unit picker beside it');
+  assert.ok(html.includes('value="weeks" selected'), 'defaulting to weeks');
+  assert.ok(html.includes('>months</option>'), 'with months available');
+  assert.ok(html.includes('value="2"'), 'sensible default count');
 
-  const months = renderAddItem(asset, 'custom-months');
-  assert.ok(months.includes('Months between'));
-  assert.ok(months.includes('value="4"'));
+  const asMonths = renderAddItem(asset, 'custom', {customUnit: 'months'});
+  assert.ok(asMonths.includes('value="months" selected'));
 });
 
 test('every kind of preset round-trips through scheduleFromForm', () => {
   assert.deepEqual(fromForm('weekly', {}), {type: 'interval', every: 1, unit: 'weeks'});
-  assert.deepEqual(fromForm('custom-weeks', {every: '5'}), {type: 'interval', every: 5, unit: 'weeks'});
-  assert.deepEqual(fromForm('custom-months', {every: '4'}), {type: 'interval', every: 4, unit: 'months'});
+  assert.deepEqual(fromForm('custom', {every: '5', unit: 'weeks'}), {type: 'interval', every: 5, unit: 'weeks'});
+  assert.deepEqual(fromForm('custom', {every: '4', unit: 'months'}), {type: 'interval', every: 4, unit: 'months'});
+  assert.equal(fromForm('custom', {every: '5', unit: 'centuries'}), null, 'refuses an unknown unit');
+  assert.equal(fromForm('custom', {every: '5'}), null, 'refuses a missing unit');
   assert.deepEqual(fromForm('miles', {every: '7500'}), {type: 'interval', every: 7500, unit: 'miles'});
   assert.deepEqual(fromForm('yearly', {}), {type: 'interval', every: 1, unit: 'years'});
-  assert.equal(fromForm('custom-weeks', {every: '0'}), null, 'refuses zero');
-  assert.equal(fromForm('custom-weeks', {every: 'lots'}), null, 'refuses nonsense');
-  assert.equal(fromForm('custom-weeks', {}), null, 'refuses a missing count');
+  assert.equal(fromForm('custom', {every: '0', unit: 'weeks'}), null, 'refuses zero');
+  assert.equal(fromForm('custom', {every: 'lots', unit: 'weeks'}), null, 'refuses nonsense');
+  assert.equal(fromForm('custom', {unit: 'weeks'}), null, 'refuses a missing count');
 });
 
-test('the editor prefills a custom interval from the item, then defaults on a unit change', () => {
-  const item = {id: 'i1', schedule: {type: 'interval', every: 5, unit: 'weeks'}};
+test('the editor prefills a custom interval from the item, count and unit both', () => {
+  const item = {id: 'i1', schedule: {type: 'interval', every: 5, unit: 'weeks'}, log: []};
   const asset = {category: 'home'};
 
   const asIs = renderScheduleEditor(item, null, asset);
-  assert.ok(asIs.includes('value="custom-weeks" selected'), 'opens on what it is');
+  assert.ok(asIs.includes('value="custom" selected'), 'opens on Custom');
   assert.ok(asIs.includes('value="5"'), 'showing its own count');
+  assert.ok(asIs.includes('value="weeks" selected'), 'and its own unit');
 
-  const switched = renderScheduleEditor(item, 'custom-months', asset);
-  assert.ok(switched.includes('Months between'));
-  assert.ok(switched.includes('value="4"'), "the months default, not 5 weeks carried across");
+  const asMonths = renderScheduleEditor(item, 'custom', asset, {customUnit: 'months'});
+  assert.ok(asMonths.includes('value="months" selected'), 'the unit picker drives the unit');
 });
 
 test('a weekly schedule reads back in plain language', () => {
@@ -612,4 +617,119 @@ test('the engine actually schedules weeks', () => {
   const due = nextDue(item, {now: new Date(2026, 5, 10)});
   assert.equal(due.date, '2026-06-15', 'June 1 + 2 weeks');
   assert.equal(due.state, 'due_soon');
+});
+
+/* ---- Custom… and start dates -------------------------------------------------------------- */
+
+import { usesStartDate, CUSTOM_UNITS } from '../js/view.js';
+import { today, formatDay } from '../js/schedule.js';
+
+const TODAY = formatDay(today());
+
+test('REGRESSION: one Custom option replaces a per-unit entry each', () => {
+  const labels = presetsFor({category: 'home'}).map(([, p]) => p.label);
+  assert.equal(labels.filter(l => l.startsWith('Custom')).length, 2, 'Custom… and Custom date');
+  assert.equal(labels.some(l => /Every N (weeks|months)/.test(l)), false,
+    'no per-unit custom entries cluttering the list');
+  assert.deepEqual(CUSTOM_UNITS.map(u => u.key), ['weeks', 'months']);
+});
+
+test('"One-off, on a date" is now called Custom date', () => {
+  const labels = presetsFor({category: 'home'}).map(([, p]) => p.label);
+  assert.ok(labels.includes('Custom date'));
+  assert.equal(labels.some(l => l.includes('One-off')), false);
+});
+
+test('recurring presets take a start date; one-offs and mileage do not', () => {
+  for(const k of ['weekly', 'monthly', '3-months', '6-months', 'yearly', 'custom']){
+    assert.equal(usesStartDate(k), true, `${k} recurs on the calendar`);
+  }
+  assert.equal(usesStartDate('once'), false, 'its date IS the date');
+  assert.equal(usesStartDate('miles'), false, 'counted from an odometer, not a day');
+});
+
+test('REGRESSION: the start date defaults to today and stays hidden', () => {
+  const s = emptyState();
+  const home = addAsset(s, null, {name: 'House', category: 'home'});
+  const html = renderAddItem(findAsset(s, home.id).asset, '3-months');
+
+  assert.ok(html.includes('Starts today'), 'stated, not asked');
+  assert.ok(html.includes(`type="hidden" name="start" value="${TODAY}"`), 'submitted regardless');
+  assert.equal(html.includes('type="date"'), false, 'no picker until asked for');
+  assert.ok(html.includes('data-show-start'), 'but there is a way in');
+});
+
+test('asking for a date reveals a picker, still defaulted to today', () => {
+  const s = emptyState();
+  const home = addAsset(s, null, {name: 'House', category: 'home'});
+  const html = renderAddItem(findAsset(s, home.id).asset, '3-months', {showStart: true});
+  assert.ok(html.includes(`name="start" type="date" value="${TODAY}"`));
+  assert.equal(html.includes('Starts today'), false, 'the summary is replaced by the field');
+});
+
+test('a chosen start date survives the re-render', () => {
+  const s = emptyState();
+  const home = addAsset(s, null, {name: 'House', category: 'home'});
+  const html = renderAddItem(findAsset(s, home.id).asset, '3-months',
+    {showStart: true, start: '2026-09-15'});
+  assert.ok(html.includes('value="2026-09-15"'));
+});
+
+test('a one-off gets no start date, only its own date', () => {
+  const s = emptyState();
+  const home = addAsset(s, null, {name: 'House', category: 'home'});
+  const html = renderAddItem(findAsset(s, home.id).asset, 'once');
+  assert.equal(html.includes('name="start"'), false);
+  assert.ok(html.includes('name="date"'));
+});
+
+test('the start date is carried onto the schedule it belongs to', () => {
+  assert.deepEqual(fromForm('3-months', {start: '2026-09-01'}),
+    {type: 'interval', every: 3, unit: 'months', startDate: '2026-09-01'});
+  assert.deepEqual(fromForm('custom', {every: '2', unit: 'weeks', start: '2026-09-01'}),
+    {type: 'interval', every: 2, unit: 'weeks', startDate: '2026-09-01'});
+  assert.deepEqual(fromForm('once', {date: '2026-09-01', start: '2026-01-01'}),
+    {type: 'once', date: '2026-09-01'}, 'a one-off ignores it');
+  assert.deepEqual(fromForm('miles', {every: '5000', start: '2026-09-01'}),
+    {type: 'interval', every: 5000, unit: 'miles'}, 'mileage ignores it');
+});
+
+test('REGRESSION: a start date is when the thing is FIRST due, not when counting begins', () => {
+  /* "Every 3 months starting Sep 1" means do it on Sep 1 — not Dec 1. */
+  const item = {schedule: {type: 'interval', every: 3, unit: 'months', startDate: '2026-09-01'},
+                log: [], createdAt: '2026-08-01T00:00:00Z'};
+  const due = nextDue(item, {now: new Date(2026, 7, 30)});
+  assert.equal(due.date, '2026-09-01');
+  assert.equal(due.state, 'due_soon');
+});
+
+test('once logged, the log takes over from the start date', () => {
+  const item = {schedule: {type: 'interval', every: 3, unit: 'months', startDate: '2026-09-01'},
+                log: [{id: 'l1', date: '2026-09-03'}], createdAt: '2026-08-01T00:00:00Z'};
+  assert.equal(nextDue(item, {now: new Date(2026, 8, 10)}).date, '2026-12-03');
+});
+
+test('a start date in the past and never done reads as overdue', () => {
+  const item = {schedule: {type: 'interval', every: 1, unit: 'months', startDate: '2026-06-01'},
+                log: [], createdAt: '2026-05-01T00:00:00Z'};
+  const due = nextDue(item, {now: new Date(2026, 7, 30)});
+  assert.equal(due.date, '2026-06-01');
+  assert.equal(due.state, 'overdue');
+});
+
+test('an item without a start date behaves exactly as before', () => {
+  const item = {schedule: {type: 'interval', every: 1, unit: 'months'},
+                log: [], createdAt: '2026-05-01T00:00:00Z'};
+  assert.equal(nextDue(item, {now: new Date(2026, 4, 15)}).date, '2026-06-01',
+    'still counted from createdAt');
+});
+
+test('the editor offers no start date once there is history', () => {
+  const asset = {category: 'home'};
+  const fresh = {id: 'i1', schedule: {type: 'interval', every: 3, unit: 'months'}, log: []};
+  assert.ok(renderScheduleEditor(fresh, null, asset).includes('name="start"'));
+
+  const used = {...fresh, log: [{id: 'l1', date: '2026-01-01'}]};
+  assert.equal(renderScheduleEditor(used, null, asset).includes('name="start"'), false,
+    'it would do nothing, so it is not offered');
 });

@@ -37,6 +37,9 @@ const ui = {
   addingItemFor: null,
   itemPreset: '3-months',
   assetCategory: 'car',         // the Kind chosen in the add-asset form, which drives its example
+  customUnit: null,             // weeks/months, when the Custom… preset is chosen
+  showStart: false,             // the start-date picker is hidden until asked for
+  start: null,                  // a start date the user picked, kept across re-renders
 };
 
 /* ---- routing ----------------------------------------------------------------------------- */
@@ -96,7 +99,7 @@ function render(){
     if(ui.addingAssetUnder !== undefined) html += renderAddAsset(ui.addingAssetUnder, ui.assetCategory);
     if(ui.addingItemFor){
       const hit = findAsset(state, ui.addingItemFor);
-      if(hit) html += renderAddItem(hit.asset, ui.itemPreset);
+      if(hit) html += renderAddItem(hit.asset, ui.itemPreset, ui);
     }
     html += ui.tab === 'assets'
       ? renderAssets(state)
@@ -124,6 +127,9 @@ function closeForms(){
   ui.editing = null;
   ui.schedulePreset = null;
   ui.confirmingDelete = null;
+  ui.customUnit = null;
+  ui.showStart = false;
+  ui.start = null;
   ui.addingAssetUnder = undefined;
   ui.addingItemFor = null;
 }
@@ -275,6 +281,14 @@ appEl.addEventListener('click', e => {
     return render();
   }
 
+  if(el('[data-show-start]')){
+    /* Keep whatever is already in the hidden field so revealing the picker does not reset it. */
+    const current = appEl.querySelector('[name="start"]');
+    ui.start = current ? current.value : null;
+    ui.showStart = true;
+    return render();
+  }
+
   const addAssetBtn = el('[data-add-asset]');
   if(addAssetBtn){
     const under = addAssetBtn.dataset.addAsset;
@@ -291,6 +305,19 @@ appEl.addEventListener('change', e => {
   const preset = e.target.closest('[data-preset-select]');
   if(preset){
     ui.itemPreset = preset.value;
+    ui.customUnit = null;
+    return render();
+  }
+
+  /* Preserve the fields around the unit dropdown across the re-render it causes. */
+  const unit = e.target.closest('[name="unit"]');
+  if(unit){
+    const form = unit.closest('form');
+    const every = form && form.querySelector('[name="every"]');
+    const start = form && form.querySelector('[name="start"]');
+    ui.customUnit = unit.value;
+    if(start) ui.start = start.value;
+    if(every) ui.everyDraft = every.value;
     return render();
   }
 

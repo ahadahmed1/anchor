@@ -9,7 +9,7 @@
 
 import { liveAssets, liveItems, liveLog, CATEGORIES, CATEGORY_ORDER, assetMileage, countWithin } from './model.js';
 import { relativeDue, shortDue } from './timeline.js';
-import { describe } from './schedule.js';
+import { describe, today, formatDay } from './schedule.js';
 
 export function escapeHtml(value){
   return String(value == null ? '' : value)
@@ -188,9 +188,8 @@ export function presetForSchedule(schedule){
   for(const [key, p] of Object.entries(PRESETS)){
     if(p.schedule && p.schedule.unit === schedule.unit && p.schedule.every === Number(schedule.every)) return key;
   }
-  for(const [key, p] of Object.entries(PRESETS)){
-    if(p.needs === 'count' && p.unit === schedule.unit) return key;
-  }
+  if(schedule.unit === 'miles') return 'miles';
+  if(CUSTOM_UNITS.some(u => u.key === schedule.unit)) return 'custom';
   return '';
 }
 
@@ -199,7 +198,7 @@ export function presetForSchedule(schedule){
  * and the two that carry a value drop into a sub-view with the relevant field rather than
  * being silently unavailable.
  */
-export function renderScheduleEditor(item, preset, asset){
+export function renderScheduleEditor(item, preset, asset, ui = {}){
   const current = presetForSchedule(item.schedule);
   const chosen = preset == null ? current : preset;
   const needs = (PRESETS[chosen] || {}).needs;
@@ -221,21 +220,32 @@ export function renderScheduleEditor(item, preset, asset){
     .join('');
 
   const select = `<select class="edit-input" data-schedule-select="${escapeHtml(item.id)}">${options}</select>`;
-  if(!needs) return select;
 
   /* Prefill from the item only when the chosen preset is still what it is on, so switching
      "every 2 weeks" to "every N months" offers that preset's default rather than carrying 2
      across into a different unit. */
   const sched = item.schedule || {};
   const keepsValue = chosen === current;
-  const field = presetField(chosen, needs === 'date'
-    ? (keepsValue ? sched.date : null)
-    : (keepsValue ? sched.every : null));
+  const field = presetField(
+    chosen,
+    needs === 'date' ? (keepsValue ? sched.date : null) : (keepsValue ? sched.every : null),
+    ui.customUnit != null ? ui.customUnit : (keepsValue ? sched.unit : null),
+  );
+
+  /* A start date only decides the FIRST due date, so once anything has been logged the log
+     takes over and the control would be a lie. Offer it only while the history is empty. */
+  const startField = liveLog(item).length === 0
+    ? startDateField(chosen, ui.showStart, ui.start || (keepsValue ? sched.startDate : null))
+    : '';
+
+  /* Nothing to fill in and no start date to offer: the dropdown alone commits the change. */
+  if(!needs && !startField) return select;
 
   return `<form class="schedule-editor" data-schedule-form="${escapeHtml(item.id)}">
       ${select}
       <input type="hidden" name="preset" value="${escapeHtml(chosen)}">
       ${field}
+      ${startField}
       <div class="form-actions">
         <button class="btn-primary" type="submit">Save</button>
         <button class="btn-quiet" type="button" data-cancel-form="1">Cancel</button>
@@ -266,7 +276,7 @@ export function renderItemDetail(row, ui = {}){
       <section class="detail-block">
         <h2 class="detail-label">Schedule</h2>
         ${ui.editing === `schedule:${item.id}`
-          ? renderScheduleEditor(item, ui.schedulePreset, asset)
+          ? renderScheduleEditor(item, ui.schedulePreset, asset, ui)
           : `<span class="editable" data-edit="schedule:${escapeHtml(item.id)}" tabindex="0" role="button">${escapeHtml(describe(item.schedule))}</span>`}
       </section>
 
@@ -375,7 +385,7 @@ export function renderAssetDetail(asset, ui = {}){
           ? `<ul class="asset-items flat">${items.map(renderAssetItem).join('')}</ul>`
           : `<p class="detail-empty">Nothing scheduled for this yet.</p>`}
         ${ui.addingItemFor === asset.id
-          ? renderAddItem(asset, ui.itemPreset)
+          ? renderAddItem(asset, ui.itemPreset, ui)
           : `<button class="btn-quiet" data-add-item="${id}">Add something to do</button>`}
       </section>
 
@@ -433,33 +443,88 @@ export function renderAddAsset(parentId, category = 'car'){
  * every "every N somethings" case — weeks, months and miles are the same interaction with a
  * different unit and label, so they share one code path rather than three.
  */
+/**
+ * The schedule choices. Common intervals are named outright; anything else is one **Custom…**
+ * option that asks for a number and a unit.
+ *
+ * An earlier version listed "Every N weeks…" and "Every N months…" as separate entries, which
+ * put the awkward ones in the middle of the list and made the dropdown longer than the set of
+ * ideas in it. One Custom option keeps the named intervals scannable and moves the number/unit
+ * choice into fields, where it belongs.
+ */
+export const CUSTOM_UNITS = [
+  {key: 'weeks',  label: 'weeks'},
+  {key: 'months', label: 'months'},
+];
+
 export const PRESETS = {
-  'weekly':        {label: 'Every week',      schedule: {type: 'interval', every: 1, unit: 'weeks'}},
-  'custom-weeks':  {label: 'Every N weeks…',  needs: 'count', unit: 'weeks',
-                    countLabel: 'Weeks between',  countDefault: 2},
-  'monthly':       {label: 'Every month',     schedule: {type: 'interval', every: 1, unit: 'months'}},
-  '3-months':      {label: 'Every 3 months',  schedule: {type: 'interval', every: 3, unit: 'months'}},
-  '6-months':      {label: 'Every 6 months',  schedule: {type: 'interval', every: 6, unit: 'months'}},
-  'custom-months': {label: 'Every N months…', needs: 'count', unit: 'months',
-                    countLabel: 'Months between', countDefault: 4},
-  'yearly':        {label: 'Every year',      schedule: {type: 'interval', every: 1, unit: 'years'}},
-  'miles':         {label: 'Every N miles…',  needs: 'count', unit: 'miles',
-                    countLabel: 'Miles between',  countDefault: 5000},
-  'once':          {label: 'One-off, on a date', needs: 'date'},
+  'weekly':   {label: 'Every week',      schedule: {type: 'interval', every: 1, unit: 'weeks'}},
+  'monthly':  {label: 'Every month',     schedule: {type: 'interval', every: 1, unit: 'months'}},
+  '3-months': {label: 'Every 3 months',  schedule: {type: 'interval', every: 3, unit: 'months'}},
+  '6-months': {label: 'Every 6 months',  schedule: {type: 'interval', every: 6, unit: 'months'}},
+  'yearly':   {label: 'Every year',      schedule: {type: 'interval', every: 1, unit: 'years'}},
+  'miles':    {label: 'Every N miles…',  needs: 'count', unit: 'miles',
+               countLabel: 'Miles between', countDefault: 5000},
+  'custom':   {label: 'Custom…',         needs: 'custom', countDefault: 2, unit: 'weeks'},
+  'once':     {label: 'Custom date',     needs: 'date'},
 };
 
-/** The extra field a preset needs, if any. */
-function presetField(preset, value){
+/** Presets that recur on the calendar, and so can be given a start date. */
+export function usesStartDate(preset){
+  const p = PRESETS[preset];
+  if(!p) return false;
+  if(p.schedule) return true;
+  return p.needs === 'custom';
+}
+
+/** The extra field(s) a preset needs, if any. */
+function presetField(preset, value, unit){
   const p = PRESETS[preset];
   if(!p || !p.needs) return '';
+
   if(p.needs === 'date'){
     return `<label class="field"><span>Date</span>
         <input name="date" type="date" required value="${escapeHtml(value == null ? '' : value)}"></label>`;
   }
+
   const shown = value == null || value === '' ? p.countDefault : value;
+
+  if(p.needs === 'custom'){
+    const chosenUnit = CUSTOM_UNITS.some(u => u.key === unit) ? unit : p.unit;
+    const options = CUSTOM_UNITS
+      .map(u => `<option value="${u.key}"${u.key === chosenUnit ? ' selected' : ''}>${escapeHtml(u.label)}</option>`)
+      .join('');
+    return `<div class="field">
+        <span>Every</span>
+        <div class="field-pair">
+          <input name="every" type="number" inputmode="numeric" min="1" required
+                 value="${escapeHtml(shown)}" aria-label="How many">
+          <select name="unit" aria-label="Unit">${options}</select>
+        </div>
+      </div>`;
+  }
+
   return `<label class="field"><span>${escapeHtml(p.countLabel)}</span>
       <input name="every" type="number" inputmode="numeric" min="1" required
              value="${escapeHtml(shown)}"></label>`;
+}
+
+/**
+ * Start date. Defaults to today and stays out of the way — a recurring thing almost always
+ * starts now, and making everyone confirm that would be a field for the rare case.
+ */
+function startDateField(preset, show, value){
+  if(!usesStartDate(preset)) return '';
+  const start = value || formatDay(today());
+  if(!show){
+    return `<div class="startdate">
+        <span>Starts today</span>
+        <button class="link" type="button" data-show-start="1">Pick a date</button>
+        <input type="hidden" name="start" value="${escapeHtml(start)}">
+      </div>`;
+  }
+  return `<label class="field"><span>Starts</span>
+      <input name="start" type="date" value="${escapeHtml(start)}"></label>`;
 }
 
 /**
@@ -472,14 +537,15 @@ export function presetsFor(asset){
   return Object.entries(PRESETS).filter(([key]) => key !== 'miles' || cat.tracksMileage);
 }
 
-export function renderAddItem(asset, preset = '3-months'){
+export function renderAddItem(asset, preset = '3-months', ui = {}){
   const available = presetsFor(asset);
   const chosen = available.some(([k]) => k === preset) ? preset : '3-months';
   const options = available
     .map(([key, p]) => `<option value="${key}"${key === chosen ? ' selected' : ''}>${escapeHtml(p.label)}</option>`)
     .join('');
   const cat = CATEGORIES[asset.category] || CATEGORIES.other;
-  const extra = presetField(chosen);
+  const extra = presetField(chosen, null, ui.customUnit)
+              + startDateField(chosen, ui.showStart, ui.start);
 
   return `<form class="card form" data-add-item-form="${escapeHtml(asset.id)}">
       <h2 class="form-head">Add to ${escapeHtml(asset.name)}</h2>
@@ -503,11 +569,29 @@ export function renderAddItem(asset, preset = '3-months'){
 export function scheduleFromForm(preset, values = {}){
   const p = PRESETS[preset];
   if(!p) return null;
-  if(p.schedule) return {...p.schedule};
+
+  /* The start date rides along on any schedule that recurs on the calendar. It is always
+     submitted — hidden and set to today unless the user opened the picker — so the first due
+     date is explicit rather than implied by whenever the record happened to be created. */
+  const withStart = schedule =>
+    schedule && usesStartDate(preset) && values.start
+      ? {...schedule, startDate: values.start}
+      : schedule;
+
+  if(p.schedule) return withStart({...p.schedule});
+
+  if(p.needs === 'custom'){
+    const every = Number(values.every);
+    const unit = CUSTOM_UNITS.some(u => u.key === values.unit) ? values.unit : null;
+    if(!unit || !Number.isFinite(every) || every <= 0) return null;
+    return withStart({type: 'interval', every, unit});
+  }
+
   if(p.needs === 'count'){
     const every = Number(values.every);
     return Number.isFinite(every) && every > 0 ? {type: 'interval', every, unit: p.unit} : null;
   }
+
   if(p.needs === 'date') return values.date ? {type: 'once', date: values.date} : null;
   return null;
 }
