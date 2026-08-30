@@ -313,3 +313,38 @@ textarea.edit-input{ resize: vertical; line-height: 1.45; }
 }
 
 .schedule-editor{ display: grid; gap: 12px; }
+
+/* ---- asset detail ---- */
+
+.asset-head{
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  width: 100%; text-align: left; cursor: pointer;
+  font: inherit; color: inherit;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 12px 14px;
+  min-height: var(--tap);
+}
+.asset-head:hover{ border-color: var(--ink-faint); }
+
+.chips{ display: flex; flex-wrap: wrap; gap: 6px; }
+.chip{
+  min-height: 38px; padding: 0 12px; border-radius: 999px; cursor: pointer;
+  background: var(--card); color: var(--ink-soft);
+  border: 1px solid var(--line); font-weight: 500;
+}
+.chip.on{ background: var(--accent); color: var(--paper); border-color: var(--accent); font-weight: 600; }
+
+.fields{ margin: 0; display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 4px 14px; align-items: baseline; }
+.fields dt{ font-size: 13px; color: var(--ink-soft); font-weight: 600; }
+.fields dd{ margin: 0; min-width: 0; }
+
+.asset-items.flat, .asset-children.flat{
+  margin: 0; padding: 0; border: 0; display: grid; gap: 6px;
+}
+
+.confirm{
+  border: 1px solid color-mix(in srgb, var(--urgent) 45%, transparent);
+  background: var(--urgent-bg); color: var(--ink);
+  border-radius: var(--radius); padding: 14px; display: grid; gap: 12px;
+}
+.confirm-text{ margin: 0; font-size: 14px; line-height: 1.5; }

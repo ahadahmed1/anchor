@@ -279,6 +279,21 @@ export function deleteEntry(state, itemId, entryId){
 
 /* ---- derived views ----------------------------------------------------------------------- */
 
+/**
+ * How much lives inside an asset, counting live records only.
+ * Deleting an asset cascades, so the UI needs this to say what a delete will actually take
+ * with it rather than asking for confirmation of an unstated consequence.
+ */
+export function countWithin(asset){
+  let assets = 0, items = 0;
+  const walk = a => {
+    items += liveItems(a).length;
+    for(const child of liveAssets(a)){ assets++; walk(child); }
+  };
+  walk(asset);
+  return {assets, items};
+}
+
 /** An asset's current odometer reading, or null. Only cars carry one. */
 export function assetMileage(asset){
   const raw = asset && asset.fields ? asset.fields.mileage : null;

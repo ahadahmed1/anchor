@@ -364,3 +364,90 @@ test('the detail page uses the editor when the schedule is being edited', () => 
   const editing = renderItemDetail(row, {editing: 'schedule:' + filter.id, schedulePreset: 'miles'});
   assert.ok(editing.includes('data-schedule-form="' + filter.id + '"'));
 });
+
+/* ---- asset detail ------------------------------------------------------------------------ */
+
+import { renderAssetDetail } from '../js/view.js';
+import { countWithin, findAsset, updateAsset, deleteItem as delItem } from '../js/model.js';
+
+test('countWithin counts only live descendants', () => {
+  const {s, home, furnace} = household();
+  addItem(s, furnace.id, {name: 'Service', schedule: null});
+  assert.deepEqual(countWithin(findAsset(s, home.id).asset), {assets: 1, items: 2},
+    'the furnace, its filter and its service');
+
+  delItem(s, findAsset(s, furnace.id).asset.items[0].id);
+  assert.deepEqual(countWithin(findAsset(s, home.id).asset), {assets: 1, items: 1},
+    'a tombstoned item stops counting');
+  assert.deepEqual(countWithin(findAsset(s, furnace.id).asset), {assets: 0, items: 1});
+});
+
+test('asset detail shows name, category and its own fields', () => {
+  const {s, car} = household();
+  const html = renderAssetDetail(findAsset(s, car.id).asset, {});
+  assert.ok(html.includes('data-edit="aname:' + car.id + '"'), 'name is editable');
+  assert.ok(html.includes('data-edit="acat:' + car.id + '"'), 'category is editable');
+  assert.ok(html.includes('Odometer'), 'car fields appear');
+  assert.ok(html.includes('data-edit="afield:' + car.id + ':mileage"'));
+  assert.ok(html.includes('41000'), 'and are prefilled');
+});
+
+test('category renders as chips when being edited, per ADR-0003', () => {
+  const {s, car} = household();
+  const html = renderAssetDetail(findAsset(s, car.id).asset, {editing: 'acat:' + car.id});
+  assert.ok(html.includes('data-set-category="' + car.id + '|home"'));
+  assert.ok(html.includes('class="chip on"'), 'the current one is marked');
+  assert.equal(html.includes('<select'), false, 'chips, not a select');
+});
+
+test('a category with no fields renders no Details block', () => {
+  const s = emptyState();
+  const a = addAsset(s, null, {name: 'Shed', category: 'outdoor'});
+  assert.equal(renderAssetDetail(findAsset(s, a.id).asset, {}).includes('Details'), false);
+});
+
+test('asset detail lists what is scheduled and what is nested', () => {
+  const {s, home} = household();
+  const html = renderAssetDetail(findAsset(s, home.id).asset, {});
+  assert.ok(html.includes('data-open-asset='), 'the furnace is reachable');
+  assert.ok(html.includes('Furnace'));
+  assert.ok(html.includes('data-add-item="' + home.id + '"'));
+  assert.ok(html.includes('data-add-asset="' + home.id + '"'), 'can nest further');
+});
+
+test('REGRESSION: deleting an asset states what goes with it', () => {
+  /* The vault convention on native dialogs exists partly because a confirm() has no room to
+     say this. Deleting a house cascades tombstones through everything inside it. */
+  const {s, home} = household();
+  const asset = findAsset(s, home.id).asset;
+
+  const closed = renderAssetDetail(asset, {});
+  assert.ok(closed.includes('data-confirm-delete-asset='), 'asks first');
+  assert.equal(closed.includes('data-delete-asset='), false, 'never one tap');
+
+  const open = renderAssetDetail(asset, {confirmingDelete: home.id});
+  assert.ok(open.includes('1 scheduled item'), 'names the count');
+  assert.ok(open.includes('1 nested asset'));
+  assert.ok(open.includes('including their history'));
+  assert.ok(open.includes('data-delete-asset="' + home.id + '"'));
+});
+
+test('the delete confirm says so when nothing else is attached', () => {
+  const {s, car} = household();
+  const bare = addAsset(s, null, {name: 'Shed', category: 'outdoor'});
+  const html = renderAssetDetail(findAsset(s, bare.id).asset, {confirmingDelete: bare.id});
+  assert.ok(html.includes('Nothing else is attached'));
+});
+
+test('the confirm pluralises', () => {
+  const {s, home, furnace} = household();
+  addItem(s, furnace.id, {name: 'Service', schedule: null});
+  const html = renderAssetDetail(findAsset(s, home.id).asset, {confirmingDelete: home.id});
+  assert.ok(html.includes('2 scheduled items'), 'plural for two');
+  assert.ok(html.includes('1 nested asset'), 'singular for one');
+});
+
+test('the assets list opens asset detail rather than a form', () => {
+  const {s, car} = household();
+  assert.ok(renderAssets(s).includes('data-open-asset="' + car.id + '"'));
+});

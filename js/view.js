@@ -7,7 +7,7 @@
    Interaction is expressed as data- attributes that app.js delegates on, so no element ever
    needs to be found again after render. */
 
-import { liveAssets, liveItems, liveLog, CATEGORIES, assetMileage } from './model.js';
+import { liveAssets, liveItems, liveLog, CATEGORIES, CATEGORY_ORDER, assetMileage, countWithin } from './model.js';
 import { relativeDue, shortDue } from './timeline.js';
 import { describe } from './schedule.js';
 
@@ -108,11 +108,11 @@ function renderAssetNode(asset, depth){
   const cat = CATEGORIES[asset.category] || CATEGORIES.other;
   const miles = assetMileage(asset);
 
-  return `<li class="asset" data-asset="${escapeHtml(asset.id)}" style="--depth:${depth}">
-      <div class="asset-head">
+  return `<li class="asset" style="--depth:${depth}">
+      <button class="asset-head" data-open-asset="${escapeHtml(asset.id)}">
         <span class="asset-name">${escapeHtml(asset.name || 'Untitled')}</span>
         <span class="asset-meta">${escapeHtml(cat.label)}${miles == null ? '' : ' · ' + escapeHtml(miles.toLocaleString()) + ' mi'}</span>
-      </div>
+      </button>
       ${items.length ? `<ul class="asset-items">${items.map(renderAssetItem).join('')}</ul>` : ''}
       ${children.length ? `<ul class="asset-children">${children.map(c => renderAssetNode(c, depth + 1)).join('')}</ul>` : ''}
     </li>`;
@@ -290,6 +290,94 @@ function renderDoneAction(row, ui){
     return `<button class="btn-primary detail-action" data-open-log="${id}">Mark done…</button>`;
   }
   return `<button class="btn-primary detail-action" data-done="${id}">Mark done today</button>`;
+}
+
+/* ---- asset detail ------------------------------------------------------------------------ */
+
+/** Category as a chip grid rather than a select, per ADR-0003. Commits on tap. */
+function renderCategoryChips(asset, editing){
+  if(editing !== `acat:${asset.id}`){
+    const cat = CATEGORIES[asset.category] || CATEGORIES.other;
+    return `<span class="editable" data-edit="acat:${escapeHtml(asset.id)}" tabindex="0" role="button">${escapeHtml(cat.label)}</span>`;
+  }
+  return `<div class="chips">${CATEGORY_ORDER.map(key => {
+    const on = key === asset.category;
+    return `<button class="chip${on ? ' on' : ''}" data-set-category="${escapeHtml(asset.id)}|${escapeHtml(key)}">${escapeHtml(CATEGORIES[key].label)}</button>`;
+  }).join('')}</div>`;
+}
+
+/** The category's own fields — make/plate/odometer, address, provider. */
+function renderAssetFields(asset, editing){
+  const cat = CATEGORIES[asset.category] || CATEGORIES.other;
+  if(!cat.fields.length) return '';
+  return `<section class="detail-block">
+      <h2 class="detail-label">Details</h2>
+      <dl class="fields">${cat.fields.map(f => `
+        <dt>${escapeHtml(f.label)}</dt>
+        <dd>${editableField(`afield:${asset.id}:${f.key}`, asset.fields[f.key] == null ? '' : String(asset.fields[f.key]), {editing, placeholder: '—'})}</dd>
+      `).join('')}</dl>
+    </section>`;
+}
+
+/** Deleting cascades, so the confirm names what goes with it. See the vault convention on
+    never using a native dialog: an inline confirm has room to state the consequence. */
+function renderDeleteConfirm(asset, confirming){
+  const id = escapeHtml(asset.id);
+  if(confirming !== asset.id){
+    return `<button class="btn-danger" data-confirm-delete-asset="${id}">Delete ${escapeHtml(asset.name || 'this')}</button>`;
+  }
+  const {assets, items} = countWithin(asset);
+  const parts = [];
+  if(items) parts.push(`${items} scheduled ${items === 1 ? 'item' : 'items'}`);
+  if(assets) parts.push(`${assets} nested ${assets === 1 ? 'asset' : 'assets'}`);
+  const consequence = parts.length
+    ? `This also removes ${parts.join(' and ')}, including their history.`
+    : 'Nothing else is attached to it.';
+
+  return `<div class="confirm" role="alertdialog" aria-label="Confirm delete">
+      <p class="confirm-text"><strong>Delete ${escapeHtml(asset.name || 'this asset')}?</strong> ${escapeHtml(consequence)}</p>
+      <div class="form-actions">
+        <button class="btn-danger" data-delete-asset="${id}">Delete</button>
+        <button class="btn-quiet" data-cancel-form="1">Cancel</button>
+      </div>
+    </div>`;
+}
+
+export function renderAssetDetail(asset, ui = {}){
+  const items = liveItems(asset);
+  const children = liveAssets(asset);
+  const id = escapeHtml(asset.id);
+
+  return `<article class="detail">
+      <button class="btn-quiet back" data-back="1">‹ Back</button>
+
+      <h1 class="detail-name">${editableField(`aname:${asset.id}`, asset.name, {editing: ui.editing, placeholder: 'Untitled'})}</h1>
+      <p class="detail-asset">${renderCategoryChips(asset, ui.editing)}</p>
+
+      ${renderAssetFields(asset, ui.editing)}
+
+      <section class="detail-block">
+        <h2 class="detail-label">Scheduled <span class="bucket-count">${items.length}</span></h2>
+        ${items.length
+          ? `<ul class="asset-items flat">${items.map(renderAssetItem).join('')}</ul>`
+          : `<p class="detail-empty">Nothing scheduled for this yet.</p>`}
+        <button class="btn-quiet" data-add-item="${id}">Add something to do</button>
+      </section>
+
+      <section class="detail-block">
+        <h2 class="detail-label">Inside this <span class="bucket-count">${children.length}</span></h2>
+        ${children.length
+          ? `<ul class="asset-children flat">${children.map(c => `
+              <li class="asset-item"><button class="asset-item-body" data-open-asset="${escapeHtml(c.id)}">
+                <span class="row-name">${escapeHtml(c.name || 'Untitled')}</span>
+                <span class="row-sub">${escapeHtml((CATEGORIES[c.category] || CATEGORIES.other).label)}</span>
+              </button></li>`).join('')}</ul>`
+          : ''}
+        <button class="btn-quiet" data-add-asset="${id}">Add something inside</button>
+      </section>
+
+      ${renderDeleteConfirm(asset, ui.confirmingDelete)}
+    </article>`;
 }
 
 /* ---- inline forms ------------------------------------------------------------------------ */

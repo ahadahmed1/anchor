@@ -8,13 +8,14 @@
 import { loadState, saveState, loadTheme, saveTheme } from './persist.js';
 import {
   addAsset, addItem, logCompletion, findAsset, findItem,
-  updateItem, deleteItem, deleteEntry, liveLog, assetMileage,
+  updateItem, updateAsset, deleteItem, deleteAsset, deleteEntry, liveLog, assetMileage,
 } from './model.js';
 import { buildTimeline } from './timeline.js';
 import { nextDue } from './schedule.js';
 import {
   renderTimeline, renderAssets, renderTabs, renderStorageWarning,
-  renderAddAsset, renderAddItem, renderItemDetail, scheduleFromForm, PRESETS,
+  renderAddAsset, renderAddItem, renderItemDetail, renderAssetDetail,
+  scheduleFromForm, PRESETS,
 } from './view.js';
 
 const appEl = document.getElementById('app');
@@ -27,8 +28,10 @@ let storageStatus = 'ok';
 const ui = {
   tab: 'due',
   itemId: null,                 // set when viewing an item's detail page
+  assetId: null,                // set when viewing an asset's detail page
   editing: null,                // the single field currently editable, per ADR-0003
   schedulePreset: null,         // null = whatever the item already is; else the chosen preset
+  confirmingDelete: null,       // asset awaiting an inline delete confirmation
   openLogId: null,              // mileage item awaiting an odometer reading
   addingAssetUnder: undefined,  // undefined = closed; null = top level; id = nested
   addingItemFor: null,
@@ -42,8 +45,12 @@ const ui = {
 function readRoute(){
   const hash = location.hash || '';
   const item = /^#\/item\/(.+)$/.exec(hash);
+  const asset = /^#\/asset\/(.+)$/.exec(hash);
   ui.itemId = item ? decodeURIComponent(item[1]) : null;
-  ui.tab = hash === '#/assets' ? 'assets' : 'due';
+  ui.assetId = asset ? decodeURIComponent(asset[1]) : null;
+  /* An asset page belongs to the Assets tab, so Back from it lands where you came from. */
+  if(hash === '#/assets' || ui.assetId) ui.tab = 'assets';
+  else if(!ui.itemId) ui.tab = 'due';
 }
 function goto(hash){
   location.hash = hash;
@@ -64,20 +71,29 @@ function currentRow(){
 
 function render(){
   const row = currentRow();
+  const assetHit = ui.assetId ? findAsset(state, ui.assetId) : null;
 
-  /* The detail page is a place, not a panel: it replaces the tabs rather than sitting under
+  /* A detail page is a place, not a panel: it replaces the tabs rather than sitting under
      them, so there is one way back and it is the Back button. */
-  chromeEl.innerHTML = row ? '' : renderTabs(ui.tab);
+  chromeEl.innerHTML = (row || assetHit) ? '' : renderTabs(ui.tab);
 
   let html = renderStorageWarning(storageStatus);
 
   if(row){
     html += renderItemDetail(row, ui);
+  } else if(assetHit){
+    html += renderAssetDetail(assetHit.asset, ui);
+    if(ui.addingAssetUnder !== undefined) html += renderAddAsset(ui.addingAssetUnder);
+    if(ui.addingItemFor){
+      const hit = findAsset(state, ui.addingItemFor);
+      if(hit) html += renderAddItem(hit.asset, ui.itemPreset);
+    }
   } else {
-    if(ui.itemId){
+    if(ui.itemId || ui.assetId){
       /* Deep link to something deleted or never existing. Say so rather than showing a blank. */
-      html += `<p class="warning" role="alert">That item no longer exists.</p>`;
+      html += `<p class="warning" role="alert">That ${ui.itemId ? 'item' : 'asset'} no longer exists.</p>`;
       ui.itemId = null;
+      ui.assetId = null;
     }
     if(ui.addingAssetUnder !== undefined) html += renderAddAsset(ui.addingAssetUnder);
     if(ui.addingItemFor){
@@ -109,6 +125,7 @@ function closeForms(){
   ui.openLogId = null;
   ui.editing = null;
   ui.schedulePreset = null;
+  ui.confirmingDelete = null;
   ui.addingAssetUnder = undefined;
   ui.addingItemFor = null;
 }
@@ -119,16 +136,42 @@ function closeForms(){
    a native blur, and a changed value would then be committed by the very keystroke meant to
    discard it. See ADR-0003, where this cost a bug the first time round. */
 
+/* Field keys are `kind:id[:subkey]`. Ids are UUIDs and carry no colons, so splitting is safe. */
 function commitField(input){
   const key = input.dataset.field;
   if(!key) return false;
-  const [field, id] = key.split(':');
+  const [kind, id, subkey] = key.split(':');
   const value = input.value;
-  const hit = findItem(state, id);
-  if(!hit) return false;
-  if(hit.item[field] === value) return false;   // nothing to save
-  updateItem(state, id, {[field]: value});
-  return true;
+
+  if(kind === 'name' || kind === 'notes'){
+    const hit = findItem(state, id);
+    if(!hit || hit.item[kind] === value) return false;
+    updateItem(state, id, {[kind]: value});
+    return true;
+  }
+
+  if(kind === 'aname'){
+    const hit = findAsset(state, id);
+    if(!hit || hit.asset.name === value) return false;
+    updateAsset(state, id, {name: value});
+    return true;
+  }
+
+  if(kind === 'afield'){
+    const hit = findAsset(state, id);
+    if(!hit) return false;
+    const before = hit.asset.fields[subkey];
+    /* Blank clears the field rather than storing an empty string, so assetMileage and the
+       category field renderers see one kind of absent. */
+    const next = value === '' ? undefined : value;
+    if((before == null ? '' : String(before)) === value) return false;
+    const fields = {...hit.asset.fields};
+    if(next === undefined) delete fields[subkey]; else fields[subkey] = next;
+    updateAsset(state, id, {fields});
+    return true;
+  }
+
+  return false;
 }
 
 /* ---- events ------------------------------------------------------------------------------ */
@@ -145,6 +188,45 @@ appEl.addEventListener('click', e => {
   if(open){
     closeForms();
     return goto('#/item/' + encodeURIComponent(open.dataset.openItem));
+  }
+
+  const openAsset = el('[data-open-asset]');
+  if(openAsset){
+    closeForms();
+    return goto('#/asset/' + encodeURIComponent(openAsset.dataset.openAsset));
+  }
+
+  const setCat = el('[data-set-category]');
+  if(setCat){
+    const [assetId, category] = setCat.dataset.setCategory.split('|');
+    updateAsset(state, assetId, {category});
+    ui.editing = null;
+    return commit();
+  }
+
+  const confirmDel = el('[data-confirm-delete-asset]');
+  if(confirmDel){
+    ui.confirmingDelete = confirmDel.dataset.confirmDeleteAsset;
+    return render();
+  }
+
+  const delAsset = el('[data-delete-asset]');
+  if(delAsset){
+    const hit = findAsset(state, delAsset.dataset.deleteAsset);
+    const parentId = hit && hit.parent ? hit.parent.id : null;
+    deleteAsset(state, delAsset.dataset.deleteAsset);
+    closeForms();
+    /* Back to the parent if there is one, otherwise the list — never a dead page. */
+    goto(parentId ? '#/asset/' + encodeURIComponent(parentId) : '#/assets');
+    return commit();
+  }
+
+  const addItemBtn = el('[data-add-item]');
+  if(addItemBtn){
+    closeForms();
+    ui.addingItemFor = addItemBtn.dataset.addItem;
+    ui.itemPreset = '3-months';
+    return render();
   }
 
   if(el('[data-back]')){
@@ -195,17 +277,10 @@ appEl.addEventListener('click', e => {
 
   const addAssetBtn = el('[data-add-asset]');
   if(addAssetBtn){
+    const under = addAssetBtn.dataset.addAsset;
     closeForms();
-    ui.addingAssetUnder = null;
-    return render();
-  }
-
-  /* Tapping an asset in the Assets tab offers to add work to it. */
-  const asset = el('[data-asset]');
-  if(asset && ui.tab === 'assets'){
-    closeForms();
-    ui.addingItemFor = asset.dataset.asset;
-    ui.itemPreset = '3-months';
+    /* "1" is the top-level button; anything else is an asset id to nest under. */
+    ui.addingAssetUnder = under && under !== '1' ? under : null;
     return render();
   }
 });
@@ -278,8 +353,13 @@ appEl.addEventListener('submit', e => {
     const parent = form.dataset.addAssetForm || null;
     const created = addAsset(state, parent, {name: values.name, category: values.category});
     closeForms();
-    /* Straight into adding work for it — an asset with nothing scheduled does nothing. */
-    if(created) ui.addingItemFor = created.id;
+    if(created){
+      /* Land on the new asset and open the add-item form straight away — an asset with
+         nothing scheduled does nothing, so this is always the next step. */
+      ui.addingItemFor = created.id;
+      ui.itemPreset = '3-months';
+      goto('#/asset/' + encodeURIComponent(created.id));
+    }
     return commit();
   }
 
