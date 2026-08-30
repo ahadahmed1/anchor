@@ -353,14 +353,19 @@ textarea.edit-input{ resize: vertical; line-height: 1.45; }
 .detail + .form, .warning + .form{ margin-top: 18px; }
 
 /* Custom interval: a count and its unit side by side. */
-.field-pair{ display: flex; gap: 8px; }
-.field-pair input{ flex: 1 1 90px; min-width: 0; }
-.field-pair select{ flex: 0 0 auto; }
-.field-pair input, .field-pair select{
+/* Both children must override the `width: 100%` that `.field input, .field select` sets, or the
+   select claims the whole row — it does not shrink — and the number input collapses to its
+   spinner arrows while the select overflows the card. */
+.field-pair{ display: flex; gap: 8px; align-items: stretch; width: 100%; }
+.field-pair input,
+.field-pair select{
+  width: auto;
   min-height: var(--tap); padding: 0 12px;
   border: 1px solid var(--line); border-radius: 10px;
   background: var(--paper); color: var(--ink); font: inherit;
 }
+.field-pair input{ flex: 1 1 auto; min-width: 4rem; }
+.field-pair select{ flex: 0 1 auto; max-width: 45%; }
 
 /* Start date: a statement with a way in, not a field demanding attention. */
 .startdate{

@@ -653,7 +653,7 @@ test('REGRESSION: the start date defaults to today and stays hidden', () => {
   const home = addAsset(s, null, {name: 'House', category: 'home'});
   const html = renderAddItem(findAsset(s, home.id).asset, '3-months');
 
-  assert.ok(html.includes('Starts today'), 'stated, not asked');
+  assert.ok(html.includes('Starts a different day'), 'offers the change, does not demand it');
   assert.ok(html.includes(`type="hidden" name="start" value="${TODAY}"`), 'submitted regardless');
   assert.equal(html.includes('type="date"'), false, 'no picker until asked for');
   assert.ok(html.includes('data-show-start'), 'but there is a way in');
@@ -664,7 +664,7 @@ test('asking for a date reveals a picker, still defaulted to today', () => {
   const home = addAsset(s, null, {name: 'House', category: 'home'});
   const html = renderAddItem(findAsset(s, home.id).asset, '3-months', {showStart: true});
   assert.ok(html.includes(`name="start" type="date" value="${TODAY}"`));
-  assert.equal(html.includes('Starts today'), false, 'the summary is replaced by the field');
+  assert.equal(html.includes('Starts a different day'), false, 'the summary is replaced by the field');
 });
 
 test('a chosen start date survives the re-render', () => {
@@ -732,4 +732,19 @@ test('the editor offers no start date once there is history', () => {
   const used = {...fresh, log: [{id: 'l1', date: '2026-01-01'}]};
   assert.equal(renderScheduleEditor(used, null, asset).includes('name="start"'), false,
     'it would do nothing, so it is not offered');
+});
+
+test('REGRESSION: the custom pair renders one number input and one unit select', () => {
+  /* Both must beat the `width: 100%` on `.field input, .field select`, or the select takes the
+     whole row and the number input collapses to its arrows. The markup is asserted here; the
+     widths live in .field-pair in css/styles.css. */
+  const s = emptyState();
+  const home = addAsset(s, null, {name: 'House', category: 'home'});
+  const html = renderAddItem(findAsset(s, home.id).asset, 'custom');
+
+  assert.equal((html.match(/name="every"/g) || []).length, 1, 'exactly one count input');
+  assert.equal((html.match(/name="unit"/g) || []).length, 1, 'exactly one unit select');
+  assert.ok(html.includes('class="field-pair"'), 'they share a row');
+  assert.ok(html.includes('aria-label="How many"'), 'the count is labelled for screen readers');
+  assert.ok(html.includes('aria-label="Unit"'));
 });

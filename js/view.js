@@ -518,7 +518,7 @@ function startDateField(preset, show, value){
   const start = value || formatDay(today());
   if(!show){
     return `<div class="startdate">
-        <span>Starts today</span>
+        <span>Starts a different day</span>
         <button class="link" type="button" data-show-start="1">Pick a date</button>
         <input type="hidden" name="start" value="${escapeHtml(start)}">
       </div>`;
