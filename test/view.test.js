@@ -303,9 +303,18 @@ test('presetForSchedule recognises what an item is already on', () => {
   assert.equal(presetForSchedule({type: 'interval', every: 1, unit: 'months'}), 'monthly');
   assert.equal(presetForSchedule({type: 'interval', every: 1, unit: 'years'}), 'yearly');
   assert.equal(presetForSchedule({type: 'interval', every: 5000, unit: 'miles'}), 'miles');
+  assert.equal(presetForSchedule({type: 'interval', every: 1, unit: 'weeks'}), 'weekly');
   assert.equal(presetForSchedule({type: 'once', date: '2026-06-01'}), 'once');
-  assert.equal(presetForSchedule({type: 'interval', every: 2, unit: 'weeks'}), '',
-    'a schedule no preset covers matches none');
+
+  /* An exact match wins over the custom fallback, so a named preset reads as itself. */
+  assert.equal(presetForSchedule({type: 'interval', every: 6, unit: 'months'}), '6-months');
+  /* Anything else on a unit with a custom option falls back to that option. */
+  assert.equal(presetForSchedule({type: 'interval', every: 2, unit: 'weeks'}), 'custom-weeks');
+  assert.equal(presetForSchedule({type: 'interval', every: 4, unit: 'months'}), 'custom-months');
+  assert.equal(presetForSchedule({type: 'interval', every: 7000, unit: 'miles'}), 'miles');
+
+  assert.equal(presetForSchedule({type: 'interval', every: 10, unit: 'days'}), '',
+    'days has no preset at all, custom or otherwise');
   assert.equal(presetForSchedule(null), '');
 });
 
@@ -343,8 +352,8 @@ test('an existing one-off prefills its date', () => {
 });
 
 test('a schedule no preset covers keeps a place in the list', () => {
-  const html = renderScheduleEditor({id: 'i1', schedule: {type: 'interval', every: 2, unit: 'weeks'}}, null);
-  assert.ok(html.includes('Every 2 weeks'), 'described in the options');
+  const html = renderScheduleEditor({id: 'i1', schedule: {type: 'interval', every: 10, unit: 'days'}}, null);
+  assert.ok(html.includes('Every 10 days'), 'described in the options');
   assert.ok(html.includes('<option value="" selected'), 'and selected, so opening cannot discard it');
 });
 
@@ -455,6 +464,7 @@ test('the assets list opens asset detail rather than a form', () => {
 /* ---- bugs found by actually using the app (2026-08-30) ------------------------------------ */
 
 import { presetsFor, renderAddAsset, renderAddItem } from '../js/view.js';
+import { describe as describeSchedule } from '../js/schedule.js';
 
 test('REGRESSION: the example name follows the Kind, not always a car', () => {
   /* One hard-coded "2019 Honda CR-V" read as an instruction on every other kind. */
@@ -539,4 +549,67 @@ test('a form open for a different asset does not leak onto this one', () => {
   const {s, car, home} = household();
   const html = renderAssetDetail(findAsset(s, car.id).asset, {addingItemFor: home.id});
   assert.equal(html.includes('data-add-item-form'), false);
+});
+
+/* ---- weeks and custom intervals ----------------------------------------------------------- */
+
+test('the preset list offers weeks, and customs for weeks and months', () => {
+  const keys = presetsFor({category: 'home'}).map(([k]) => k);
+  assert.deepEqual(keys, ['weekly', 'custom-weeks', 'monthly', '3-months', '6-months',
+                          'custom-months', 'yearly', 'once'],
+    'ascending by interval, miles absent for a home');
+  assert.ok(presetsFor({category: 'car'}).map(([k]) => k).includes('miles'));
+});
+
+test('a custom interval asks for its count with the right label and default', () => {
+  const s = emptyState();
+  const home = addAsset(s, null, {name: 'House', category: 'home'});
+  const asset = findAsset(s, home.id).asset;
+
+  const weeks = renderAddItem(asset, 'custom-weeks');
+  assert.ok(weeks.includes('Weeks between'));
+  assert.ok(weeks.includes('value="2"'), 'sensible default');
+  assert.ok(weeks.includes('name="every"'));
+
+  const months = renderAddItem(asset, 'custom-months');
+  assert.ok(months.includes('Months between'));
+  assert.ok(months.includes('value="4"'));
+});
+
+test('every kind of preset round-trips through scheduleFromForm', () => {
+  assert.deepEqual(fromForm('weekly', {}), {type: 'interval', every: 1, unit: 'weeks'});
+  assert.deepEqual(fromForm('custom-weeks', {every: '5'}), {type: 'interval', every: 5, unit: 'weeks'});
+  assert.deepEqual(fromForm('custom-months', {every: '4'}), {type: 'interval', every: 4, unit: 'months'});
+  assert.deepEqual(fromForm('miles', {every: '7500'}), {type: 'interval', every: 7500, unit: 'miles'});
+  assert.deepEqual(fromForm('yearly', {}), {type: 'interval', every: 1, unit: 'years'});
+  assert.equal(fromForm('custom-weeks', {every: '0'}), null, 'refuses zero');
+  assert.equal(fromForm('custom-weeks', {every: 'lots'}), null, 'refuses nonsense');
+  assert.equal(fromForm('custom-weeks', {}), null, 'refuses a missing count');
+});
+
+test('the editor prefills a custom interval from the item, then defaults on a unit change', () => {
+  const item = {id: 'i1', schedule: {type: 'interval', every: 5, unit: 'weeks'}};
+  const asset = {category: 'home'};
+
+  const asIs = renderScheduleEditor(item, null, asset);
+  assert.ok(asIs.includes('value="custom-weeks" selected'), 'opens on what it is');
+  assert.ok(asIs.includes('value="5"'), 'showing its own count');
+
+  const switched = renderScheduleEditor(item, 'custom-months', asset);
+  assert.ok(switched.includes('Months between'));
+  assert.ok(switched.includes('value="4"'), "the months default, not 5 weeks carried across");
+});
+
+test('a weekly schedule reads back in plain language', () => {
+  assert.equal(describeSchedule({type: 'interval', every: 1, unit: 'weeks'}), 'Every week');
+  assert.equal(describeSchedule({type: 'interval', every: 2, unit: 'weeks'}), 'Every 2 weeks');
+  assert.equal(describeSchedule({type: 'interval', every: 4, unit: 'months'}), 'Every 4 months');
+});
+
+test('the engine actually schedules weeks', () => {
+  const item = {schedule: {type: 'interval', every: 2, unit: 'weeks'},
+                log: [{date: '2026-06-01'}], createdAt: '2026-01-01'};
+  const due = nextDue(item, {now: new Date(2026, 5, 10)});
+  assert.equal(due.date, '2026-06-15', 'June 1 + 2 weeks');
+  assert.equal(due.state, 'due_soon');
 });

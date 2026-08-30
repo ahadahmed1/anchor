@@ -175,15 +175,21 @@ function renderLogEntry(entry){
     </li>`;
 }
 
-/** Which preset an existing schedule corresponds to, or '' when it matches none of them. */
+/**
+ * Which preset an existing schedule corresponds to, or '' when it matches none.
+ * Exact matches win, so "every 3 months" reads as the named preset rather than as a custom
+ * value; anything else on a unit that has a custom option falls back to that.
+ */
 export function presetForSchedule(schedule){
   if(!schedule) return '';
   if(schedule.type === 'once') return 'once';
-  if(schedule.type === 'interval'){
-    if(schedule.unit === 'miles') return 'miles';
-    for(const [key, p] of Object.entries(PRESETS)){
-      if(p.schedule && p.schedule.unit === schedule.unit && p.schedule.every === Number(schedule.every)) return key;
-    }
+  if(schedule.type !== 'interval') return '';
+
+  for(const [key, p] of Object.entries(PRESETS)){
+    if(p.schedule && p.schedule.unit === schedule.unit && p.schedule.every === Number(schedule.every)) return key;
+  }
+  for(const [key, p] of Object.entries(PRESETS)){
+    if(p.needs === 'count' && p.unit === schedule.unit) return key;
   }
   return '';
 }
@@ -217,14 +223,14 @@ export function renderScheduleEditor(item, preset, asset){
   const select = `<select class="edit-input" data-schedule-select="${escapeHtml(item.id)}">${options}</select>`;
   if(!needs) return select;
 
+  /* Prefill from the item only when the chosen preset is still what it is on, so switching
+     "every 2 weeks" to "every N months" offers that preset's default rather than carrying 2
+     across into a different unit. */
   const sched = item.schedule || {};
-  const field = needs === 'miles'
-    ? `<label class="field"><span>Miles between</span>
-         <input name="every" type="number" inputmode="numeric" min="1" required
-                value="${escapeHtml(chosen === current && sched.every ? sched.every : 5000)}"></label>`
-    : `<label class="field"><span>Date</span>
-         <input name="date" type="date" required
-                value="${escapeHtml(chosen === current && sched.date ? sched.date : '')}"></label>`;
+  const keepsValue = chosen === current;
+  const field = presetField(chosen, needs === 'date'
+    ? (keepsValue ? sched.date : null)
+    : (keepsValue ? sched.every : null));
 
   return `<form class="schedule-editor" data-schedule-form="${escapeHtml(item.id)}">
       ${select}
@@ -419,14 +425,42 @@ export function renderAddAsset(parentId, category = 'car'){
     </form>`;
 }
 
+/**
+ * The schedule choices, in ascending order of interval.
+ *
+ * A preset either carries a complete `schedule` and commits on choice, or declares `needs` and
+ * drops into a sub-view for the value it cannot express in a dropdown. `needs:'count'` covers
+ * every "every N somethings" case — weeks, months and miles are the same interaction with a
+ * different unit and label, so they share one code path rather than three.
+ */
 export const PRESETS = {
-  '3-months':  {label: 'Every 3 months', schedule: {type: 'interval', every: 3,  unit: 'months'}},
-  'monthly':   {label: 'Every month',    schedule: {type: 'interval', every: 1,  unit: 'months'}},
-  '6-months':  {label: 'Every 6 months', schedule: {type: 'interval', every: 6,  unit: 'months'}},
-  'yearly':    {label: 'Every year',     schedule: {type: 'interval', every: 1,  unit: 'years'}},
-  'miles':     {label: 'Every N miles',  needs: 'miles'},
-  'once':      {label: 'One-off, on a date', needs: 'date'},
+  'weekly':        {label: 'Every week',      schedule: {type: 'interval', every: 1, unit: 'weeks'}},
+  'custom-weeks':  {label: 'Every N weeks…',  needs: 'count', unit: 'weeks',
+                    countLabel: 'Weeks between',  countDefault: 2},
+  'monthly':       {label: 'Every month',     schedule: {type: 'interval', every: 1, unit: 'months'}},
+  '3-months':      {label: 'Every 3 months',  schedule: {type: 'interval', every: 3, unit: 'months'}},
+  '6-months':      {label: 'Every 6 months',  schedule: {type: 'interval', every: 6, unit: 'months'}},
+  'custom-months': {label: 'Every N months…', needs: 'count', unit: 'months',
+                    countLabel: 'Months between', countDefault: 4},
+  'yearly':        {label: 'Every year',      schedule: {type: 'interval', every: 1, unit: 'years'}},
+  'miles':         {label: 'Every N miles…',  needs: 'count', unit: 'miles',
+                    countLabel: 'Miles between',  countDefault: 5000},
+  'once':          {label: 'One-off, on a date', needs: 'date'},
 };
+
+/** The extra field a preset needs, if any. */
+function presetField(preset, value){
+  const p = PRESETS[preset];
+  if(!p || !p.needs) return '';
+  if(p.needs === 'date'){
+    return `<label class="field"><span>Date</span>
+        <input name="date" type="date" required value="${escapeHtml(value == null ? '' : value)}"></label>`;
+  }
+  const shown = value == null || value === '' ? p.countDefault : value;
+  return `<label class="field"><span>${escapeHtml(p.countLabel)}</span>
+      <input name="every" type="number" inputmode="numeric" min="1" required
+             value="${escapeHtml(shown)}"></label>`;
+}
 
 /**
  * The schedule presets that make sense for an asset.
@@ -444,14 +478,8 @@ export function renderAddItem(asset, preset = '3-months'){
   const options = available
     .map(([key, p]) => `<option value="${key}"${key === chosen ? ' selected' : ''}>${escapeHtml(p.label)}</option>`)
     .join('');
-  const needs = (PRESETS[chosen] || {}).needs;
   const cat = CATEGORIES[asset.category] || CATEGORIES.other;
-  const extra = needs === 'miles'
-    ? `<label class="field"><span>Miles between</span>
-         <input name="every" type="number" inputmode="numeric" value="5000" min="1" required></label>`
-    : needs === 'date'
-      ? `<label class="field"><span>Date</span><input name="date" type="date" required></label>`
-      : '';
+  const extra = presetField(chosen);
 
   return `<form class="card form" data-add-item-form="${escapeHtml(asset.id)}">
       <h2 class="form-head">Add to ${escapeHtml(asset.name)}</h2>
@@ -472,13 +500,13 @@ export function renderAddItem(asset, preset = '3-months'){
 }
 
 /** Turn a submitted add-item form into a schedule object. */
-export function scheduleFromForm(preset, values){
+export function scheduleFromForm(preset, values = {}){
   const p = PRESETS[preset];
   if(!p) return null;
   if(p.schedule) return {...p.schedule};
-  if(p.needs === 'miles'){
+  if(p.needs === 'count'){
     const every = Number(values.every);
-    return Number.isFinite(every) && every > 0 ? {type: 'interval', every, unit: 'miles'} : null;
+    return Number.isFinite(every) && every > 0 ? {type: 'interval', every, unit: p.unit} : null;
   }
   if(p.needs === 'date') return values.date ? {type: 'once', date: values.date} : null;
   return null;
