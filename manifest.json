@@ -1,15 +1,17 @@
 {
   "name": "Anchor",
   "short_name": "Anchor",
-  "description": "Track software projects and recurring life maintenance — car, home, health, finances and more — in one offline-first ledger.",
+  "description": "Household maintenance \u2014 what needs doing, and when you last did it.",
   "id": "./",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0F1218",
-  "theme_color": "#0F1218",
-  "categories": ["productivity"],
+  "background_color": "#f7f5f1",
+  "theme_color": "#f7f5f1",
+  "categories": [
+    "productivity"
+  ],
   "icons": [
     {
       "src": "icons/icon-192.png",
@@ -38,9 +40,9 @@
   ],
   "shortcuts": [
     {
-      "name": "New domain",
-      "short_name": "New",
-      "url": "./?action=new"
+      "name": "Assets",
+      "short_name": "Assets",
+      "url": "./#/assets"
     }
   ]
 }
