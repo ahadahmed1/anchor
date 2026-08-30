@@ -28,6 +28,7 @@ const ui = {
   tab: 'due',
   itemId: null,                 // set when viewing an item's detail page
   editing: null,                // the single field currently editable, per ADR-0003
+  schedulePreset: null,         // null = whatever the item already is; else the chosen preset
   openLogId: null,              // mileage item awaiting an odometer reading
   addingAssetUnder: undefined,  // undefined = closed; null = top level; id = nested
   addingItemFor: null,
@@ -107,6 +108,7 @@ function commit(){
 function closeForms(){
   ui.openLogId = null;
   ui.editing = null;
+  ui.schedulePreset = null;
   ui.addingAssetUnder = undefined;
   ui.addingItemFor = null;
 }
@@ -153,6 +155,9 @@ appEl.addEventListener('click', e => {
   const edit = el('[data-edit]');
   if(edit){
     ui.editing = edit.dataset.edit;
+    /* Open the schedule editor on whatever the item already is, so the current setting is
+       preselected and its value prefilled rather than reset to a default. */
+    ui.schedulePreset = null;
     return render();
   }
 
@@ -213,19 +218,19 @@ appEl.addEventListener('change', e => {
     return render();
   }
 
-  /* On the detail page the preset picker commits straight away — a chip-style choice, not a
-     form to submit. The empty option means "keep what it has". */
+  /* On the detail page a preset commits straight away — a chip-style choice, not a form to
+     submit. Miles and one-off carry a value a select cannot, so those drop into a sub-view
+     with the field instead. Shaped after ADR-0003's recurrence popover. */
   const sched = e.target.closest('[data-schedule-select]');
   if(sched){
     const chosen = PRESETS[sched.value];
     if(chosen && chosen.schedule){
       updateItem(state, sched.dataset.scheduleSelect, {schedule: {...chosen.schedule}});
       ui.editing = null;
+      ui.schedulePreset = null;
       return commit();
     }
-    /* Miles and one-off need a value alongside the choice, which a bare select cannot carry.
-       Left for the edit form rather than guessing a number on the user's behalf. */
-    ui.editing = null;
+    ui.schedulePreset = sched.value;
     return render();
   }
 });
@@ -275,6 +280,14 @@ appEl.addEventListener('submit', e => {
     closeForms();
     /* Straight into adding work for it — an asset with nothing scheduled does nothing. */
     if(created) ui.addingItemFor = created.id;
+    return commit();
+  }
+
+  if(form.matches('[data-schedule-form]')){
+    const schedule = scheduleFromForm(values.preset, values);
+    if(!schedule) return;
+    updateItem(state, form.dataset.scheduleForm, {schedule});
+    closeForms();
     return commit();
   }
 

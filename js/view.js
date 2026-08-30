@@ -175,15 +175,67 @@ function renderLogEntry(entry){
     </li>`;
 }
 
+/** Which preset an existing schedule corresponds to, or '' when it matches none of them. */
+export function presetForSchedule(schedule){
+  if(!schedule) return '';
+  if(schedule.type === 'once') return 'once';
+  if(schedule.type === 'interval'){
+    if(schedule.unit === 'miles') return 'miles';
+    for(const [key, p] of Object.entries(PRESETS)){
+      if(p.schedule && p.schedule.unit === schedule.unit && p.schedule.every === Number(schedule.every)) return key;
+    }
+  }
+  return '';
+}
+
+/**
+ * The schedule editor, shaped after ADR-0003's recurrence popover: presets commit on choice,
+ * and the two that carry a value drop into a sub-view with the relevant field rather than
+ * being silently unavailable.
+ */
+export function renderScheduleEditor(item, preset){
+  const current = presetForSchedule(item.schedule);
+  const chosen = preset == null ? current : preset;
+  const needs = (PRESETS[chosen] || {}).needs;
+
+  /* An item on a schedule no preset covers keeps a home in the list, so opening the editor
+     cannot quietly discard it. */
+  const keep = current === ''
+    ? `<option value=""${chosen === '' ? ' selected' : ''}>${escapeHtml(describe(item.schedule))}</option>`
+    : '';
+  const options = keep + Object.entries(PRESETS)
+    .map(([key, p]) => `<option value="${key}"${key === chosen ? ' selected' : ''}>${escapeHtml(p.label)}</option>`)
+    .join('');
+
+  const select = `<select class="edit-input" data-schedule-select="${escapeHtml(item.id)}">${options}</select>`;
+  if(!needs) return select;
+
+  const sched = item.schedule || {};
+  const field = needs === 'miles'
+    ? `<label class="field"><span>Miles between</span>
+         <input name="every" type="number" inputmode="numeric" min="1" required
+                value="${escapeHtml(chosen === current && sched.every ? sched.every : 5000)}"></label>`
+    : `<label class="field"><span>Date</span>
+         <input name="date" type="date" required
+                value="${escapeHtml(chosen === current && sched.date ? sched.date : '')}"></label>`;
+
+  return `<form class="schedule-editor" data-schedule-form="${escapeHtml(item.id)}">
+      ${select}
+      <input type="hidden" name="preset" value="${escapeHtml(chosen)}">
+      ${field}
+      <div class="form-actions">
+        <button class="btn-primary" type="submit">Save</button>
+        <button class="btn-quiet" type="button" data-cancel-form="1">Cancel</button>
+      </div>
+    </form>`;
+}
+
 export function renderItemDetail(row, ui = {}){
   const {item, asset, due} = row;
   const state = escapeHtml((due && due.state) || 'unknown');
   const entries = liveLog(item)
     .slice()
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
-
-  const presetOptions = Object.entries(PRESETS)
-    .map(([key, p]) => `<option value="${key}">${escapeHtml(p.label)}</option>`).join('');
 
   return `<article class="detail">
       <button class="btn-quiet back" data-back="1">‹ Back</button>
@@ -201,10 +253,7 @@ export function renderItemDetail(row, ui = {}){
       <section class="detail-block">
         <h2 class="detail-label">Schedule</h2>
         ${ui.editing === `schedule:${item.id}`
-          ? `<select class="edit-input" data-schedule-select="${escapeHtml(item.id)}">
-               <option value="">${escapeHtml(describe(item.schedule))} (keep)</option>
-               ${presetOptions}
-             </select>`
+          ? renderScheduleEditor(item, ui.schedulePreset)
           : `<span class="editable" data-edit="schedule:${escapeHtml(item.id)}" tabindex="0" role="button">${escapeHtml(describe(item.schedule))}</span>`}
       </section>
 

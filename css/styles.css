@@ -311,3 +311,5 @@ textarea.edit-input{ resize: vertical; line-height: 1.45; }
 @media (prefers-reduced-motion: no-preference){
   .row{ transition: background-color .15s ease, border-color .15s ease; }
 }
+
+.schedule-editor{ display: grid; gap: 12px; }

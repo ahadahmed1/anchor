@@ -292,3 +292,75 @@ test('timeline rows and asset items both open the detail page', () => {
   assert.ok(timeline.includes('data-open-item="' + filter.id + '"'));
   assert.ok(renderAssets(s).includes('data-open-item="' + filter.id + '"'));
 });
+
+/* ---- schedule editor --------------------------------------------------------------------- */
+
+import { renderScheduleEditor, presetForSchedule } from '../js/view.js';
+import { scheduleFromForm as fromForm } from '../js/view.js';
+
+test('presetForSchedule recognises what an item is already on', () => {
+  assert.equal(presetForSchedule({type: 'interval', every: 3, unit: 'months'}), '3-months');
+  assert.equal(presetForSchedule({type: 'interval', every: 1, unit: 'months'}), 'monthly');
+  assert.equal(presetForSchedule({type: 'interval', every: 1, unit: 'years'}), 'yearly');
+  assert.equal(presetForSchedule({type: 'interval', every: 5000, unit: 'miles'}), 'miles');
+  assert.equal(presetForSchedule({type: 'once', date: '2026-06-01'}), 'once');
+  assert.equal(presetForSchedule({type: 'interval', every: 2, unit: 'weeks'}), '',
+    'a schedule no preset covers matches none');
+  assert.equal(presetForSchedule(null), '');
+});
+
+test('a fixed preset needs no second step', () => {
+  const html = renderScheduleEditor({id: 'i1', schedule: {type: 'interval', every: 3, unit: 'months'}}, null);
+  assert.ok(html.includes('data-schedule-select="i1"'));
+  assert.equal(html.includes('<form'), false, 'commits on choice, nothing to submit');
+  assert.ok(html.includes('value="3-months" selected'), 'opens on what it already is');
+});
+
+test('REGRESSION: choosing miles opens a field instead of doing nothing', () => {
+  const html = renderScheduleEditor({id: 'i1', schedule: {type: 'interval', every: 3, unit: 'months'}}, 'miles');
+  assert.ok(html.includes('data-schedule-form="i1"'), 'drops into a sub-view');
+  assert.ok(html.includes('name="every"'));
+  assert.ok(html.includes('value="5000"'), 'sensible default when switching in');
+  assert.ok(html.includes('name="preset" value="miles"'), 'the choice travels with the form');
+});
+
+test('REGRESSION: choosing one-off opens a date field', () => {
+  const html = renderScheduleEditor({id: 'i1', schedule: null}, 'once');
+  assert.ok(html.includes('data-schedule-form="i1"'));
+  assert.ok(html.includes('type="date"'));
+  assert.ok(html.includes('name="preset" value="once"'));
+});
+
+test('an existing miles schedule prefills its own value, not the default', () => {
+  const html = renderScheduleEditor({id: 'i1', schedule: {type: 'interval', every: 7500, unit: 'miles'}}, null);
+  assert.ok(html.includes('value="7500"'), 'shows what it is, not 5000');
+  assert.ok(html.includes('value="miles" selected'));
+});
+
+test('an existing one-off prefills its date', () => {
+  const html = renderScheduleEditor({id: 'i1', schedule: {type: 'once', date: '2026-06-01'}}, null);
+  assert.ok(html.includes('value="2026-06-01"'));
+});
+
+test('a schedule no preset covers keeps a place in the list', () => {
+  const html = renderScheduleEditor({id: 'i1', schedule: {type: 'interval', every: 2, unit: 'weeks'}}, null);
+  assert.ok(html.includes('Every 2 weeks'), 'described in the options');
+  assert.ok(html.includes('<option value="" selected'), 'and selected, so opening cannot discard it');
+});
+
+test('the editor round-trips through scheduleFromForm', () => {
+  assert.deepEqual(fromForm('miles', {every: '7500'}), {type: 'interval', every: 7500, unit: 'miles'});
+  assert.deepEqual(fromForm('once', {date: '2026-06-01'}), {type: 'once', date: '2026-06-01'});
+  assert.deepEqual(fromForm('3-months', {}), {type: 'interval', every: 3, unit: 'months'});
+  assert.equal(fromForm('miles', {every: '0'}), null, 'refuses a nonsense interval');
+  assert.equal(fromForm('once', {date: ''}), null, 'refuses a missing date');
+});
+
+test('the detail page uses the editor when the schedule is being edited', () => {
+  const {s, filter} = household();
+  const row = detailRow(s, filter.id);
+  assert.ok(renderItemDetail(row, {}).includes('data-edit="schedule:' + filter.id + '"'),
+    'reads as text until clicked');
+  const editing = renderItemDetail(row, {editing: 'schedule:' + filter.id, schedulePreset: 'miles'});
+  assert.ok(editing.includes('data-schedule-form="' + filter.id + '"'));
+});
