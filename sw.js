@@ -1,8 +1,7 @@
 /* ---- Anchor service worker ----
    Bump VERSION whenever the shell files change; old caches are dropped on activate. */
-const VERSION = 'v7';
+const VERSION = 'v8';
 const SHELL_CACHE = 'anchor-shell-' + VERSION;
-const RUNTIME_CACHE = 'anchor-runtime-' + VERSION;
 
 /* Relative URLs so the app works from any sub-path (GitHub Pages, /app/, ...).
    Every module is listed: they are fetched individually, so a missing one means the app
@@ -26,8 +25,6 @@ const SHELL = [
   'icons/apple-touch-icon-180.png'
 ];
 
-const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
-
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(SHELL_CACHE)
@@ -40,7 +37,7 @@ self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
       .then(keys => Promise.all(
-        keys.filter(k => k !== SHELL_CACHE && k !== RUNTIME_CACHE).map(k => caches.delete(k))
+        keys.filter(k => k !== SHELL_CACHE).map(k => caches.delete(k))
       ))
       .then(() => self.clients.claim())
   );
@@ -69,18 +66,6 @@ self.addEventListener('fetch', event => {
         })
         .catch(() => caches.match('index.html', { ignoreSearch: true })
           .then(cached => cached || caches.match('./')))
-    );
-    return;
-  }
-
-  /* Google Fonts: cache-first, since the files are immutable and we want them offline. */
-  if (FONT_HOSTS.includes(url.hostname)) {
-    event.respondWith(
-      caches.match(request).then(cached => cached || fetch(request).then(response => {
-        const copy = response.clone();
-        caches.open(RUNTIME_CACHE).then(cache => cache.put(request, copy));
-        return response;
-      }))
     );
     return;
   }
