@@ -193,17 +193,24 @@ export function presetForSchedule(schedule){
  * and the two that carry a value drop into a sub-view with the relevant field rather than
  * being silently unavailable.
  */
-export function renderScheduleEditor(item, preset){
+export function renderScheduleEditor(item, preset, asset){
   const current = presetForSchedule(item.schedule);
   const chosen = preset == null ? current : preset;
   const needs = (PRESETS[chosen] || {}).needs;
+
+  /* Same filtering as the add form: no mileage schedule for something with no odometer — but
+     an item already on one keeps the option, or opening the editor would offer no way back to
+     what it currently is. */
+  const cat = CATEGORIES[(asset && asset.category)] || CATEGORIES.other;
+  const available = Object.entries(PRESETS)
+    .filter(([key]) => key !== 'miles' || cat.tracksMileage || current === 'miles');
 
   /* An item on a schedule no preset covers keeps a home in the list, so opening the editor
      cannot quietly discard it. */
   const keep = current === ''
     ? `<option value=""${chosen === '' ? ' selected' : ''}>${escapeHtml(describe(item.schedule))}</option>`
     : '';
-  const options = keep + Object.entries(PRESETS)
+  const options = keep + available
     .map(([key, p]) => `<option value="${key}"${key === chosen ? ' selected' : ''}>${escapeHtml(p.label)}</option>`)
     .join('');
 
@@ -253,7 +260,7 @@ export function renderItemDetail(row, ui = {}){
       <section class="detail-block">
         <h2 class="detail-label">Schedule</h2>
         ${ui.editing === `schedule:${item.id}`
-          ? renderScheduleEditor(item, ui.schedulePreset)
+          ? renderScheduleEditor(item, ui.schedulePreset, asset)
           : `<span class="editable" data-edit="schedule:${escapeHtml(item.id)}" tabindex="0" role="button">${escapeHtml(describe(item.schedule))}</span>`}
       </section>
 
@@ -361,7 +368,9 @@ export function renderAssetDetail(asset, ui = {}){
         ${items.length
           ? `<ul class="asset-items flat">${items.map(renderAssetItem).join('')}</ul>`
           : `<p class="detail-empty">Nothing scheduled for this yet.</p>`}
-        <button class="btn-quiet" data-add-item="${id}">Add something to do</button>
+        ${ui.addingItemFor === asset.id
+          ? renderAddItem(asset, ui.itemPreset)
+          : `<button class="btn-quiet" data-add-item="${id}">Add something to do</button>`}
       </section>
 
       <section class="detail-block">
@@ -373,7 +382,9 @@ export function renderAssetDetail(asset, ui = {}){
                 <span class="row-sub">${escapeHtml((CATEGORIES[c.category] || CATEGORIES.other).label)}</span>
               </button></li>`).join('')}</ul>`
           : ''}
-        <button class="btn-quiet" data-add-asset="${id}">Add something inside</button>
+        ${ui.addingAssetUnder === asset.id
+          ? renderAddAsset(asset.id, ui.assetCategory)
+          : `<button class="btn-quiet" data-add-asset="${id}">Add something inside</button>`}
       </section>
 
       ${renderDeleteConfirm(asset, ui.confirmingDelete)}
@@ -385,18 +396,21 @@ export function renderAssetDetail(asset, ui = {}){
    the event loop and freeze any browser-automation session driving the app, and an inline form
    has room to explain itself. See the knowledge-vault convention "no native dialogs in app UI". */
 
-export function renderAddAsset(parentId){
-  const options = Object.entries(CATEGORIES)
-    .map(([key, c]) => `<option value="${escapeHtml(key)}">${escapeHtml(c.label)}</option>`).join('');
+export function renderAddAsset(parentId, category = 'car'){
+  const chosen = CATEGORIES[category] ? category : 'car';
+  const options = CATEGORY_ORDER
+    .map(key => `<option value="${escapeHtml(key)}"${key === chosen ? ' selected' : ''}>${escapeHtml(CATEGORIES[key].label)}</option>`)
+    .join('');
   return `<form class="card form" data-add-asset-form="${escapeHtml(parentId || '')}">
       <h2 class="form-head">${parentId ? 'Add something inside this' : 'Add an asset'}</h2>
       <label class="field">
-        <span>Name</span>
-        <input name="name" required autocomplete="off" placeholder="2019 Honda CR-V">
+        <span>Kind</span>
+        <select name="category" data-category-select="1">${options}</select>
       </label>
       <label class="field">
-        <span>Kind</span>
-        <select name="category">${options}</select>
+        <span>Name</span>
+        <input name="name" required autocomplete="off"
+               placeholder="${escapeHtml(CATEGORIES[chosen].example)}">
       </label>
       <div class="form-actions">
         <button class="btn-primary" type="submit">Add</button>
@@ -414,11 +428,24 @@ export const PRESETS = {
   'once':      {label: 'One-off, on a date', needs: 'date'},
 };
 
+/**
+ * The schedule presets that make sense for an asset.
+ * "Every N miles" needs an odometer, so it is offered only where the category has one —
+ * otherwise it produces an item that can never come due.
+ */
+export function presetsFor(asset){
+  const cat = CATEGORIES[(asset && asset.category)] || CATEGORIES.other;
+  return Object.entries(PRESETS).filter(([key]) => key !== 'miles' || cat.tracksMileage);
+}
+
 export function renderAddItem(asset, preset = '3-months'){
-  const options = Object.entries(PRESETS)
-    .map(([key, p]) => `<option value="${key}"${key === preset ? ' selected' : ''}>${escapeHtml(p.label)}</option>`)
+  const available = presetsFor(asset);
+  const chosen = available.some(([k]) => k === preset) ? preset : '3-months';
+  const options = available
+    .map(([key, p]) => `<option value="${key}"${key === chosen ? ' selected' : ''}>${escapeHtml(p.label)}</option>`)
     .join('');
-  const needs = (PRESETS[preset] || {}).needs;
+  const needs = (PRESETS[chosen] || {}).needs;
+  const cat = CATEGORIES[asset.category] || CATEGORIES.other;
   const extra = needs === 'miles'
     ? `<label class="field"><span>Miles between</span>
          <input name="every" type="number" inputmode="numeric" value="5000" min="1" required></label>`
@@ -430,7 +457,7 @@ export function renderAddItem(asset, preset = '3-months'){
       <h2 class="form-head">Add to ${escapeHtml(asset.name)}</h2>
       <label class="field">
         <span>What</span>
-        <input name="name" required autocomplete="off" placeholder="Oil change">
+        <input name="name" required autocomplete="off" placeholder="${escapeHtml(cat.itemExample)}">
       </label>
       <label class="field">
         <span>How often</span>

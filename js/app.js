@@ -36,6 +36,7 @@ const ui = {
   addingAssetUnder: undefined,  // undefined = closed; null = top level; id = nested
   addingItemFor: null,
   itemPreset: '3-months',
+  assetCategory: 'car',         // the Kind chosen in the add-asset form, which drives its example
 };
 
 /* ---- routing ----------------------------------------------------------------------------- */
@@ -82,12 +83,9 @@ function render(){
   if(row){
     html += renderItemDetail(row, ui);
   } else if(assetHit){
+    /* The asset page renders its own add forms, inline in the section each was triggered from,
+       rather than appended after the delete button at the bottom of the page. */
     html += renderAssetDetail(assetHit.asset, ui);
-    if(ui.addingAssetUnder !== undefined) html += renderAddAsset(ui.addingAssetUnder);
-    if(ui.addingItemFor){
-      const hit = findAsset(state, ui.addingItemFor);
-      if(hit) html += renderAddItem(hit.asset, ui.itemPreset);
-    }
   } else {
     if(ui.itemId || ui.assetId){
       /* Deep link to something deleted or never existing. Say so rather than showing a blank. */
@@ -95,7 +93,7 @@ function render(){
       ui.itemId = null;
       ui.assetId = null;
     }
-    if(ui.addingAssetUnder !== undefined) html += renderAddAsset(ui.addingAssetUnder);
+    if(ui.addingAssetUnder !== undefined) html += renderAddAsset(ui.addingAssetUnder, ui.assetCategory);
     if(ui.addingItemFor){
       const hit = findAsset(state, ui.addingItemFor);
       if(hit) html += renderAddItem(hit.asset, ui.itemPreset);
@@ -178,7 +176,9 @@ function commitField(input){
 
 chromeEl.addEventListener('click', e => {
   const tab = e.target.closest('[data-tab]');
-  if(tab){ closeForms(); goto(tab.dataset.tab); }
+  /* goto() takes a hash, not a tab name. Passing 'assets' here set location.hash to '#assets',
+     which matches no route, so the Assets tab silently did nothing. */
+  if(tab){ closeForms(); goto(tab.dataset.tab === 'assets' ? '#/assets' : ''); }
 });
 
 appEl.addEventListener('click', e => {
@@ -281,6 +281,7 @@ appEl.addEventListener('click', e => {
     closeForms();
     /* "1" is the top-level button; anything else is an asset id to nest under. */
     ui.addingAssetUnder = under && under !== '1' ? under : null;
+    ui.assetCategory = 'car';
     return render();
   }
 });
@@ -290,6 +291,13 @@ appEl.addEventListener('change', e => {
   const preset = e.target.closest('[data-preset-select]');
   if(preset){
     ui.itemPreset = preset.value;
+    return render();
+  }
+
+  /* Kind drives the name example, so the form re-renders on change. */
+  const cat = e.target.closest('[data-category-select]');
+  if(cat){
+    ui.assetCategory = cat.value;
     return render();
   }
 

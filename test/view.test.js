@@ -451,3 +451,92 @@ test('the assets list opens asset detail rather than a form', () => {
   const {s, car} = household();
   assert.ok(renderAssets(s).includes('data-open-asset="' + car.id + '"'));
 });
+
+/* ---- bugs found by actually using the app (2026-08-30) ------------------------------------ */
+
+import { presetsFor, renderAddAsset, renderAddItem } from '../js/view.js';
+
+test('REGRESSION: the example name follows the Kind, not always a car', () => {
+  /* One hard-coded "2019 Honda CR-V" read as an instruction on every other kind. */
+  assert.ok(renderAddAsset(null, 'car').includes('2019 Honda CR-V'));
+  assert.ok(renderAddAsset(null, 'finance').includes('Home insurance'));
+  assert.equal(renderAddAsset(null, 'finance').includes('Honda'), false);
+  assert.ok(renderAddAsset(null, 'home').includes('123 Main St'));
+  assert.ok(renderAddAsset(null, 'person').includes('Ahad'));
+});
+
+test('the add-asset form marks the chosen Kind as selected', () => {
+  const html = renderAddAsset(null, 'appliance');
+  assert.ok(html.includes('value="appliance" selected'));
+  assert.ok(html.includes('data-category-select'), 'so changing it can re-render the example');
+});
+
+test('REGRESSION: "every N miles" is offered only where there is an odometer', () => {
+  const keys = a => presetsFor(a).map(([k]) => k);
+  assert.ok(keys({category: 'car'}).includes('miles'));
+  assert.equal(keys({category: 'finance'}).includes('miles'), false);
+  assert.equal(keys({category: 'home'}).includes('miles'), false);
+  assert.equal(keys({category: 'person'}).includes('miles'), false);
+  assert.equal(keys(undefined).includes('miles'), false, 'defaults to no odometer');
+  assert.ok(keys({category: 'home'}).includes('3-months'), 'the rest still offered');
+});
+
+test('REGRESSION: the add-item form hides miles and shows a fitting example', () => {
+  const s = emptyState();
+  const bank = addAsset(s, null, {name: 'Insurance', category: 'finance'});
+  const html = renderAddItem(findAsset(s, bank.id).asset);
+  assert.equal(html.includes('Every N miles'), false);
+  assert.equal(html.includes('Oil change'), false);
+  assert.ok(html.includes('Review the policy'), 'example matches the kind');
+
+  const {s: s2, car} = household();
+  assert.ok(renderAddItem(findAsset(s2, car.id).asset).includes('Every N miles'));
+});
+
+test('a non-car asset asked for a miles preset falls back rather than rendering it', () => {
+  const s = emptyState();
+  const bank = addAsset(s, null, {name: 'Insurance', category: 'finance'});
+  const html = renderAddItem(findAsset(s, bank.id).asset, 'miles');
+  assert.equal(html.includes('name="every"'), false, 'no miles field appears');
+  assert.ok(html.includes('value="3-months" selected'), 'falls back to a sensible preset');
+});
+
+test('the schedule editor hides miles for a non-car, but keeps it if already set', () => {
+  const noMiles = renderScheduleEditor(
+    {id: 'i1', schedule: {type: 'interval', every: 3, unit: 'months'}}, null, {category: 'home'});
+  assert.equal(noMiles.includes('Every N miles'), false);
+
+  const grandfathered = renderScheduleEditor(
+    {id: 'i1', schedule: {type: 'interval', every: 5000, unit: 'miles'}}, null, {category: 'home'});
+  assert.ok(grandfathered.includes('Every N miles'),
+    'an item already on miles must still be able to show what it is');
+});
+
+test('REGRESSION: the asset page renders its add forms inline, not after Delete', () => {
+  /* They used to be appended by app.js after renderAssetDetail, so they landed below the
+     delete button with no separation from it. */
+  const {s, car} = household();
+  const asset = findAsset(s, car.id).asset;
+
+  const withItemForm = renderAssetDetail(asset, {addingItemFor: car.id});
+  assert.ok(withItemForm.indexOf('data-add-item-form') < withItemForm.indexOf('data-confirm-delete-asset'),
+    'the add-item form sits above the delete button');
+  assert.equal(withItemForm.includes('data-add-item="'), false, 'the button is replaced by the form');
+
+  const withAssetForm = renderAssetDetail(asset, {addingAssetUnder: car.id});
+  assert.ok(withAssetForm.indexOf('data-add-asset-form') < withAssetForm.indexOf('data-confirm-delete-asset'));
+});
+
+test('the asset page shows no form when none is open', () => {
+  const {s, car} = household();
+  const html = renderAssetDetail(findAsset(s, car.id).asset, {});
+  assert.equal(html.includes('data-add-item-form'), false);
+  assert.equal(html.includes('data-add-asset-form'), false);
+  assert.ok(html.includes('data-add-item="'), 'just the buttons');
+});
+
+test('a form open for a different asset does not leak onto this one', () => {
+  const {s, car, home} = household();
+  const html = renderAssetDetail(findAsset(s, car.id).asset, {addingItemFor: home.id});
+  assert.equal(html.includes('data-add-item-form'), false);
+});

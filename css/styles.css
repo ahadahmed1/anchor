@@ -348,3 +348,6 @@ textarea.edit-input{ resize: vertical; line-height: 1.45; }
   border-radius: var(--radius); padding: 14px; display: grid; gap: 12px;
 }
 .confirm-text{ margin: 0; font-size: 14px; line-height: 1.5; }
+
+/* A form appended after the detail article (the Assets-tab add form) needs separating from it. */
+.detail + .form, .warning + .form{ margin-top: 18px; }

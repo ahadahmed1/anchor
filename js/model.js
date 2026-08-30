@@ -21,29 +21,53 @@ import { nextDue } from './schedule.js';
 
 export const STATE_VERSION = 1;
 
-/* Category drives an asset's extra fields, and nothing else. Adding one is an edit here. */
+/* Category drives an asset's extra fields, the examples the forms show, and whether the thing
+   has an odometer. Adding one is an edit here.
+
+   `example` / `itemExample` are placeholder text. They are per-category because a single
+   hard-coded example ("2019 Honda CR-V") is actively misleading on every other kind — it reads
+   as an instruction rather than an illustration.
+
+   `tracksMileage` gates the "every N miles" schedule. Only something with an odometer can be
+   scheduled by distance, and offering it elsewhere produces items that can never come due. */
 export const CATEGORIES = {
-  car:       {label: 'Car',       fields: [
-                {key: 'make',    label: 'Make',    type: 'text'},
-                {key: 'model',   label: 'Model',   type: 'text'},
-                {key: 'year',    label: 'Year',    type: 'text'},
-                {key: 'plate',   label: 'Plate',   type: 'text'},
+  car:       {label: 'Car', tracksMileage: true,
+              example: '2019 Honda CR-V', itemExample: 'Oil change',
+              fields: [
+                {key: 'make',    label: 'Make',     type: 'text'},
+                {key: 'model',   label: 'Model',    type: 'text'},
+                {key: 'year',    label: 'Year',     type: 'text'},
+                {key: 'plate',   label: 'Plate',    type: 'text'},
                 {key: 'mileage', label: 'Odometer', type: 'number'},
              ]},
-  home:      {label: 'Home',      fields: [{key: 'address', label: 'Address', type: 'text'}]},
-  appliance: {label: 'Appliance', fields: [
+  home:      {label: 'Home',
+              example: '123 Main St', itemExample: 'Clean the gutters',
+              fields: [{key: 'address', label: 'Address', type: 'text'}]},
+  appliance: {label: 'Appliance',
+              example: 'Furnace', itemExample: 'Replace the filter',
+              fields: [
                 {key: 'brand',     label: 'Brand',     type: 'text'},
                 {key: 'model',     label: 'Model',     type: 'text'},
                 {key: 'installed', label: 'Installed', type: 'date'},
              ]},
-  person:    {label: 'Person',    fields: [{key: 'provider', label: 'Provider', type: 'text'}]},
-  finance:   {label: 'Finance',   fields: [
+  person:    {label: 'Person',
+              example: 'Ahad', itemExample: 'Annual physical',
+              fields: [{key: 'provider', label: 'Provider', type: 'text'}]},
+  finance:   {label: 'Finance',
+              example: 'Home insurance', itemExample: 'Review the policy',
+              fields: [
                 {key: 'provider', label: 'Provider', type: 'text'},
                 {key: 'account',  label: 'Account',  type: 'text'},
              ]},
-  digital:   {label: 'Digital',   fields: [{key: 'account', label: 'Account / service', type: 'text'}]},
-  outdoor:   {label: 'Outdoor',   fields: []},
-  other:     {label: 'Other',     fields: []},
+  digital:   {label: 'Digital',
+              example: 'Domain name', itemExample: 'Renew it',
+              fields: [{key: 'account', label: 'Account / service', type: 'text'}]},
+  outdoor:   {label: 'Outdoor',
+              example: 'Lawn', itemExample: 'Fertilise',
+              fields: []},
+  other:     {label: 'Other',
+              example: 'Something you look after', itemExample: 'Check on it',
+              fields: []},
 };
 
 export const CATEGORY_ORDER = ['car', 'home', 'appliance', 'person', 'finance', 'digital', 'outdoor', 'other'];
