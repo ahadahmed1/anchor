@@ -653,7 +653,7 @@ test('REGRESSION: the start date defaults to today and stays hidden', () => {
   const home = addAsset(s, null, {name: 'House', category: 'home'});
   const html = renderAddItem(findAsset(s, home.id).asset, '3-months');
 
-  assert.ok(html.includes('Starts a different day'), 'offers the change, does not demand it');
+  assert.ok(html.includes('Starts a different day?'), 'offers the change, does not demand it');
   assert.ok(html.includes(`type="hidden" name="start" value="${TODAY}"`), 'submitted regardless');
   assert.equal(html.includes('type="date"'), false, 'no picker until asked for');
   assert.ok(html.includes('data-show-start'), 'but there is a way in');
@@ -664,7 +664,7 @@ test('asking for a date reveals a picker, still defaulted to today', () => {
   const home = addAsset(s, null, {name: 'House', category: 'home'});
   const html = renderAddItem(findAsset(s, home.id).asset, '3-months', {showStart: true});
   assert.ok(html.includes(`name="start" type="date" value="${TODAY}"`));
-  assert.equal(html.includes('Starts a different day'), false, 'the summary is replaced by the field');
+  assert.equal(html.includes('Starts a different day?'), false, 'the summary is replaced by the field');
 });
 
 test('a chosen start date survives the re-render', () => {
